@@ -132,3 +132,24 @@ Results:
 
 - Both unittest commands: `Ran 13 tests` — `OK` (`1.851s` and `1.852s`).
 - `git diff --check`: exit code `0`, no output.
+
+## Fix round 4 verification
+
+When Python AST parsing fails, secret detection now falls back to a constrained
+assignment scan for concrete credential-like names. This keeps malformed Python
+files covered without scanning validator/test source patterns broadly. The
+regression suite includes malformed Python with an obvious API key assignment and
+continues to validate the creator package itself.
+
+Commands:
+
+```bash
+python3 -m unittest plugins/agent-plugin-creator/tests/test_validate_plugin.py -v
+python3 -S -m unittest plugins/agent-plugin-creator/tests/test_validate_plugin.py -v
+git diff --check
+```
+
+Results:
+
+- Both unittest commands: `Ran 14 tests` — `OK` (`2.009s` and `2.011s`).
+- `git diff --check`: exit code `0`, no output.

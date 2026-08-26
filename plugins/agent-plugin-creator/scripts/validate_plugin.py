@@ -974,7 +974,7 @@ def contains_python_secret_material(content: str) -> bool:
     try:
         tree = ast.parse(content)
     except SyntaxError:
-        return False
+        return contains_python_text_secret_material(content)
 
     def is_concrete_secret_key(value: str) -> bool:
         return value.strip().lower() not in {"secret", "token", "password"} and bool(
@@ -993,6 +993,19 @@ def contains_python_secret_material(content: str) -> bool:
                 if isinstance(key, ast.Constant) and isinstance(key.value, str) and is_concrete_secret_key(key.value):
                     if isinstance(child, ast.Constant) and isinstance(child.value, str):
                         return is_obvious_secret_value(child.value)
+    return False
+
+
+def contains_python_text_secret_material(content: str) -> bool:
+    assignment_pattern = re.compile(
+        r"(?im)^[ \t]*([a-z_][a-z0-9_-]*(?:api[_-]?key|secret|token|password|passwd|private[_-]?key)[a-z0-9_-]*)"
+        r"[ \t]*=[ \t]*(?:\"([^\"\n]{6,})\"|'([^'\n]{6,})'|([^\s#]{6,}))"
+    )
+    for match in assignment_pattern.finditer(content):
+        key = match.group(1)
+        value = next(group for group in match.groups()[1:] if group is not None)
+        if key.lower() not in {"secret", "token", "password"} and is_obvious_secret_value(value):
+            return True
     return False
 
 

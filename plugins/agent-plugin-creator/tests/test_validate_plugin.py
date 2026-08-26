@@ -379,6 +379,22 @@ class ValidatePluginTest(unittest.TestCase):
             self.assertIn("secret", result.stdout.lower())
             self.assertNotIn("super-secret-value", result.stdout)
 
+    def test_rejects_secret_in_syntax_invalid_python(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            (plugin_root / "broken_settings.py").write_text(
+                'OPENAI_API_KEY = "super-secret-value"\n'
+                "def broken(:\n",
+                encoding="utf-8",
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("broken_settings.py", result.stdout)
+            self.assertIn("secret", result.stdout.lower())
+            self.assertNotIn("super-secret-value", result.stdout)
+
     def test_accepts_valid_optional_claude_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(temp_dir, clients=["codex", "claude"])
