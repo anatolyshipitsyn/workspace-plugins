@@ -34,13 +34,14 @@ SKILL_FRONTMATTER_KEYS = {
 }
 SECRET_PATTERNS = [
     re.compile(
-        r"(?im)^[ \t]*[a-z0-9_.-]*(api[_-]?key|secret|token|password|passwd|private[_-]?key)[a-z0-9_.-]*[ \t]*[:=][ \t]*['\"]?[^\s'\"]{6,}"
+        r"(?im)^[ \t]*(?:[a-z0-9_.-]+[_.-])?(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|authorization)[ \t]*[:=][ \t]*['\"]?[^\s'\"]{6,}"
     ),
     re.compile(r"(?i)\bauthorization\b\s*[:=]\s*['\"]?(?:bearer|basic)\s+[^\s'\"]+"),
 ]
-SECRET_KEY_PATTERN = re.compile(
-    r"(?i)(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|authorization)"
+SECRET_NAME_PATTERN = re.compile(
+    r"(?i)(?:^|[_.-])(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|authorization)$"
 )
+HTTP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 class ValidationFailure(Exception):
@@ -57,6 +58,12 @@ class Diagnostic:
         return f"path={self.path} | rule={self.rule} | correction={self.correction}"
 
 
+class PairTrackingDict(dict[str, Any]):
+    def __init__(self, pairs: list[tuple[str, Any]]) -> None:
+        super().__init__(pairs)
+        self.pairs = list(pairs)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("plugin_path")
@@ -66,6 +73,11 @@ def parse_args() -> argparse.Namespace:
 def read_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def read_json_with_pairs(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle, object_pairs_hook=PairTrackingDict)
 
 
 def path_label(package_root: Path, target: Path) -> str:
@@ -314,22 +326,16 @@ def parse_simple_frontmatter(frontmatter_text: str) -> dict[str, Any]:
         value = value.strip()
         if not key:
             raise ValidationFailure("Skill frontmatter contains an empty key.")
-        if value.startswith('"') and value.endswith('"') and len(value) >= 2:
-            parsed_value: Any = value[1:-1]
-        elif value.startswith("'") and value.endswith("'") and len(value) >= 2:
-            parsed_value = value[1:-1]
-        elif value in {"true", "false"}:
-            parsed_value = value == "true"
-        elif value in {"|", ">"}:
+        if value in {"|", ">"}:
             nested, index = consume_indented_block(lines, index)
-            parsed_value = parse_simple_block_scalar(nested, value)
+            parsed_value: Any = parse_simple_block_scalar(nested, value)
         elif value.startswith("[") or value.startswith("{"):
             parsed_value = parse_simple_flow_value(value)
         elif not value:
             nested, index = consume_indented_block(lines, index)
             parsed_value = parse_simple_block_value(nested)
         else:
-            parsed_value = value
+            parsed_value = parse_simple_scalar(value)
         result[key] = parsed_value
     return result
 
@@ -995,6 +1001,70 @@ def validate_remote_server(
         )
 
 
+def looks_like_secret_name(name: str) -> bool:
+    return SECRET_NAME_PATTERN.search(name.strip().lower()) is not None
+
+
+def is_valid_http_header_name(name: str) -> bool:
+    return HTTP_HEADER_NAME_PATTERN.fullmatch(name) is not None
+
+
+def is_valid_http_header_value(value: str) -> bool:
+    return all(character == "\t" or (31 < ord(character) < 127) for character in value)
+
+
+def validate_remote_headers(
+    diagnostics: list[Diagnostic],
+    package_root: Path,
+    target_path: Path,
+    server_name: str,
+    raw_server_config: dict[str, Any] | None,
+    normalized_server_config: dict[str, Any],
+) -> None:
+    headers = raw_server_config.get("headers") if isinstance(raw_server_config, dict) else None
+    if not isinstance(headers, dict):
+        headers = normalized_server_config.get("headers")
+    if not isinstance(headers, dict):
+        return
+
+    pairs = headers.pairs if isinstance(headers, PairTrackingDict) else list(headers.items())
+    seen_names: dict[str, str] = {}
+    duplicate_reported = False
+    for header_name, header_value in pairs:
+        if not isinstance(header_name, str):
+            continue
+        normalized_name = header_name.lower()
+        if normalized_name in seen_names and not duplicate_reported:
+            add_diagnostic(
+                diagnostics,
+                package_root,
+                target_path,
+                f"mcp server {server_name!r} headers must not contain case-insensitive duplicate names.",
+                "Remove duplicate header names so each header appears at most once.",
+            )
+            duplicate_reported = True
+        else:
+            seen_names[normalized_name] = header_name
+
+        if not is_valid_http_header_name(header_name):
+            add_diagnostic(
+                diagnostics,
+                package_root,
+                target_path,
+                f"mcp server {server_name!r} header names must be valid HTTP field names.",
+                "Use visible token characters only in header names.",
+            )
+
+        if isinstance(header_value, str) and not is_valid_http_header_value(header_value):
+            add_diagnostic(
+                diagnostics,
+                package_root,
+                target_path,
+                f"mcp server {server_name!r} header values must not contain HTTP control characters.",
+                "Remove newlines or other control characters from header values.",
+            )
+
+
 def validate_mcp_file(
     diagnostics: list[Diagnostic],
     package_root: Path,
@@ -1006,7 +1076,7 @@ def validate_mcp_file(
     placeholder_data: str,
 ) -> None:
     try:
-        raw_data = read_json(target_path)
+        raw_data = read_json_with_pairs(target_path)
     except (json.JSONDecodeError, OSError) as exc:
         add_diagnostic(
             diagnostics,
@@ -1044,12 +1114,14 @@ def validate_mcp_file(
         )
 
     mcp_servers = normalized_data.get("mcpServers")
+    raw_mcp_servers = raw_data.get("mcpServers")
     if not isinstance(mcp_servers, dict):
         return
 
     for server_name, server_config in sorted(mcp_servers.items()):
         if not isinstance(server_name, str) or not isinstance(server_config, dict):
             continue
+        raw_server_config = raw_mcp_servers.get(server_name) if isinstance(raw_mcp_servers, dict) else None
         transport = server_config.get("type")
         if transport == "stdio":
             validate_stdio_server(
@@ -1063,6 +1135,14 @@ def validate_mcp_file(
             )
         elif transport in {"streamable-http", "sse"}:
             validate_remote_server(diagnostics, package_root, target_path, server_name, server_config)
+            validate_remote_headers(
+                diagnostics,
+                package_root,
+                target_path,
+                server_name,
+                raw_server_config if isinstance(raw_server_config, dict) else None,
+                server_config,
+            )
 
 
 def validate_claude_manifest(diagnostics: list[Diagnostic], package_root: Path, portable_manifest: dict[str, Any]) -> None:
@@ -1124,9 +1204,8 @@ def iter_text_files(package_root: Path) -> Iterable[Path]:
 def contains_structured_secret(value: Any, key_name: str | None = None) -> bool:
     if isinstance(value, dict):
         for key, child in value.items():
-            if isinstance(key, str) and SECRET_KEY_PATTERN.search(key) and isinstance(child, str):
-                normalized = child.strip().lower()
-                if len(child.strip()) >= 6 and not normalized.startswith(("${", "<", "your-", "replace-", "example")):
+            if isinstance(key, str) and looks_like_secret_name(key) and isinstance(child, str):
+                if is_obvious_secret_value(child):
                     return True
             if contains_structured_secret(child, key if isinstance(key, str) else None):
                 return True
@@ -1141,13 +1220,14 @@ def contains_python_secret_material(content: str) -> bool:
     except SyntaxError:
         return contains_python_text_secret_material(content)
 
-    for node in tree.body:
+    for node in ast.walk(tree):
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
-                if isinstance(target, ast.Name) and SECRET_KEY_PATTERN.search(target.id):
+                if isinstance(target, ast.Name) and looks_like_secret_name(target.id):
                     if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                        return is_obvious_secret_value(node.value.value)
+                        if is_obvious_secret_value(node.value.value):
+                            return True
             if node.value is not None and contains_python_secret_dict_literal(node.value):
                 return True
     return False
@@ -1155,10 +1235,12 @@ def contains_python_secret_material(content: str) -> bool:
 
 def contains_python_text_secret_material(content: str) -> bool:
     assignment_pattern = re.compile(
-        r"(?im)^([a-z_][a-z0-9_-]*(?:api[_-]?key|secret|token|password|passwd|private[_-]?key)[a-z0-9_-]*)"
-        r"[ \t]*=[ \t]*(?:\"([^\"\n]{6,})\"|'([^'\n]{6,})'|([^\s#]{6,}))"
+        r"(?im)^[ \t]*([a-z_][a-z0-9_]*)[ \t]*(?::[^\n=]+)?=[ \t]*"
+        r"(?:\"([^\"\n]*)\"|'([^'\n]*)'|([^\s#]+))"
     )
     for match in assignment_pattern.finditer(content):
+        if not looks_like_secret_name(match.group(1)):
+            continue
         value = next(group for group in match.groups()[1:] if group is not None)
         if is_obvious_secret_value(value):
             return True
@@ -1173,7 +1255,7 @@ def contains_python_secret_dict_literal(node: ast.AST) -> bool:
             if (
                 isinstance(key, ast.Constant)
                 and isinstance(key.value, str)
-                and SECRET_KEY_PATTERN.search(key.value)
+                and looks_like_secret_name(key.value)
                 and isinstance(value, ast.Constant)
                 and isinstance(value.value, str)
                 and is_obvious_secret_value(value.value)

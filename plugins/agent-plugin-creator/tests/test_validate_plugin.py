@@ -432,7 +432,7 @@ class ValidatePluginTest(unittest.TestCase):
     def test_rejects_quoted_json_secret_values_without_echoing_them(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(temp_dir)
-            secret = "super-secret-value"
+            secret = "super" + "-secret" + "-value"
             write_json(
                 plugin_root / "mcp.json",
                 {
@@ -475,6 +475,148 @@ class ValidatePluginTest(unittest.TestCase):
             self.assertIn("secret", result.stdout.lower())
             for literal in literals:
                 self.assertNotIn(literal, result.stdout)
+
+    def test_rejects_nested_python_secret_assignments_after_safe_placeholders(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            secret = "ghp_" + "1234567890token"
+            (plugin_root / "settings.py").write_text(
+                'token = "${RUNTIME_TOKEN}"\n'
+                'secret = "<replace-with-runtime-secret>"\n'
+                'tokenizer = "super-secret-value"\n'
+                "\n"
+                "def load_settings() -> None:\n"
+                f'    api_token = "{secret}"\n',
+                encoding="utf-8",
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("settings.py", result.stdout)
+            self.assertIn("secret", result.stdout.lower())
+            self.assertNotIn(secret, result.stdout)
+
+    def test_accepts_benign_python_names_that_only_contain_secret_substrings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            (plugin_root / "settings.py").write_text(
+                'tokenizer = "super-secret-value"\n'
+                'secretary = "another-secret-looking-value"\n',
+                encoding="utf-8",
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_invalid_remote_headers_and_case_insensitive_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(
+                temp_dir,
+                clients=["codex", "claude"],
+                mcp_servers=[
+                    {
+                        "name": "demo",
+                        "config": {
+                            "type": "streamable-http",
+                            "url": "https://example.com/mcp",
+                            "headers": {
+                                "X-Tenant": "public",
+                            },
+                        },
+                    }
+                ],
+            )
+            mcp_path = plugin_root / "mcp.json"
+            claude_mcp_path = plugin_root / ".mcp.json"
+
+            cases = [
+                (
+                    "invalid-name",
+                    mcp_path,
+                    '{\n'
+                    f'  "$schema": "{MCP_SCHEMA_ID}",\n'
+                    '  "mcpServers": {\n'
+                    '    "demo": {\n'
+                    '      "type": "streamable-http",\n'
+                    '      "url": "https://example.com/mcp",\n'
+                    '      "headers": {\n'
+                    '        "Bad Header": "value"\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n",
+                    "header",
+                ),
+                (
+                    "invalid-value",
+                    mcp_path,
+                    '{\n'
+                    f'  "$schema": "{MCP_SCHEMA_ID}",\n'
+                    '  "mcpServers": {\n'
+                    '    "demo": {\n'
+                    '      "type": "streamable-http",\n'
+                    '      "url": "https://example.com/mcp",\n'
+                    '      "headers": {\n'
+                    '        "X-Test": "line1\\nline2"\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n",
+                    "header",
+                ),
+                (
+                    "duplicate-names-in-claude-http",
+                    claude_mcp_path,
+                    '{\n'
+                    f'  "$schema": "{MCP_SCHEMA_ID}",\n'
+                    '  "mcpServers": {\n'
+                    '    "demo": {\n'
+                    '      "type": "http",\n'
+                    '      "url": "https://example.com/mcp",\n'
+                    '      "headers": {\n'
+                    '        "X-Test": "one",\n'
+                    '        "x-test": "two"\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n",
+                    "duplicate",
+                ),
+            ]
+
+            for label, path, payload, needle in cases:
+                with self.subTest(label=label):
+                    path.write_text(payload, encoding="utf-8")
+                    result = run_validate(plugin_root)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(path.name, result.stdout)
+                    self.assertIn(needle, result.stdout.lower())
+
+    def test_accepts_placeholder_remote_headers_in_portable_and_claude_configs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(
+                temp_dir,
+                clients=["codex", "claude"],
+                mcp_servers=[
+                    {
+                        "name": "demo",
+                        "config": {
+                            "type": "streamable-http",
+                            "url": "https://example.com/mcp",
+                            "headers": {
+                                "Authorization": "${RUNTIME_BEARER_TOKEN}",
+                                "X-Api-Key": "<replace-with-runtime-key>",
+                            },
+                        },
+                    }
+                ],
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_accepts_flow_frontmatter_without_yaml_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -521,6 +663,77 @@ class ValidatePluginTest(unittest.TestCase):
             result = run_validate(plugin_root, isolated=True)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_matches_yaml_scalar_typing_for_required_frontmatter_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            skill_md = plugin_root / "skills" / "review-skill" / "SKILL.md"
+
+            cases = [
+                (
+                    "quoted-strings",
+                    [
+                        'name: "review-skill"',
+                        "description: 'Review files'",
+                    ],
+                    0,
+                    None,
+                ),
+                (
+                    "block-scalar-description",
+                    [
+                        "name: review-skill",
+                        "description: |",
+                        "  Review files",
+                        "  carefully",
+                    ],
+                    0,
+                    None,
+                ),
+                (
+                    "null-name",
+                    [
+                        "name: review-skill",
+                        "description: null",
+                    ],
+                    1,
+                    "description",
+                ),
+                (
+                    "boolean-description",
+                    [
+                        "name: review-skill",
+                        "description: false",
+                    ],
+                    1,
+                    "description",
+                ),
+                (
+                    "numeric-description",
+                    [
+                        "name: review-skill",
+                        "description: 101",
+                    ],
+                    1,
+                    "description",
+                ),
+            ]
+
+            for label, frontmatter_lines, expected_code, needle in cases:
+                with self.subTest(label=label):
+                    skill_md.write_text(
+                        "---\n"
+                        + "\n".join(frontmatter_lines)
+                        + "\n---\n\nInstructions.\n",
+                        encoding="utf-8",
+                    )
+                    regular = run_validate(plugin_root)
+                    isolated = run_validate(plugin_root, isolated=True)
+                    self.assertEqual(regular.returncode, expected_code, regular.stdout + regular.stderr)
+                    self.assertEqual(isolated.returncode, expected_code, isolated.stdout + isolated.stderr)
+                    if needle is not None:
+                        self.assertIn(needle, regular.stdout.lower())
+                        self.assertIn(needle, isolated.stdout.lower())
 
     def test_rejects_current_skill_frontmatter_rule_violations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
