@@ -83,5 +83,31 @@ Result:
 - The validator performs static package checks only; it does not provide an MCP
   runtime smoke test.
 - MCP command/argument path detection is intentionally heuristic: bare executable
-  names and ordinary non-path arguments remain valid, while slash-prefixed,
-  placeholder, traversal, and common script/config path values are checked.
+  names, in-package relative paths, URL-like arguments, and ordinary flags remain
+  valid; absolute paths, traversal, explicit `${PLUGIN_ROOT}` paths, and relative
+  paths resolving through an external symlink are rejected.
+
+## Fix round 2 verification
+
+Command:
+
+```bash
+python3 -m unittest plugins/agent-plugin-creator/tests/test_validate_plugin.py -v
+```
+
+Result: `Ran 12 tests in 1.944s` — `OK`.
+
+Command:
+
+```bash
+python3 -S -m unittest plugins/agent-plugin-creator/tests/test_validate_plugin.py -v
+```
+
+Result: `Ran 12 tests in 1.948s` — `OK`.
+
+The added regression coverage validates a generated stdio plugin with relative
+script and URL-like arguments, and rejects command/argument traversal and
+`${PLUGIN_ROOT}` escapes without treating flags as paths. Structured secret
+detection and dependency-independent frontmatter fallback remain covered.
+
+`git diff --check` passed with exit code `0`.

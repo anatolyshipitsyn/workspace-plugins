@@ -636,7 +636,9 @@ def resolve_plugin_relative_path(package_root: Path, raw_path: str) -> Path | No
         return (package_root / raw_path[len(PORTABLE_PLUGIN_ROOT) + 1 :]).resolve(strict=False)
     if raw_path.startswith("./"):
         return (package_root / raw_path[2:]).resolve(strict=False)
-    return None
+    if raw_path.startswith("${") or Path(raw_path).is_absolute():
+        return None
+    return (package_root / raw_path).resolve(strict=False)
 
 
 def contains_dotdot_suffix(raw_path: str, prefix: str) -> bool:
@@ -644,12 +646,15 @@ def contains_dotdot_suffix(raw_path: str, prefix: str) -> bool:
     return ".." in Path(suffix).parts
 
 
-def looks_like_mcp_path(value: str, *, command: bool = False) -> bool:
-    if value.startswith(("/", "./", "../", "${")) or "/" in value:
-        return True
-    if command:
-        return value.endswith((".py", ".js", ".ts", ".sh", ".rb", ".pl", ".exe"))
-    return value.endswith((".py", ".js", ".ts", ".sh", ".rb", ".pl", ".exe", ".json", ".yaml", ".yml"))
+def looks_like_mcp_path(value: str) -> bool:
+    """Return whether an MCP value should be checked as a filesystem path.
+
+    Bare relative values are checked because they may be package scripts, while
+    URI schemes and option flags are ordinary non-filesystem arguments.
+    """
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value):
+        return False
+    return not value.startswith("-") or "=" in value
 
 
 def validate_mcp_path_value(
@@ -663,8 +668,13 @@ def validate_mcp_path_value(
     placeholder_root: str,
     placeholder_data: str,
 ) -> None:
-    if not looks_like_mcp_path(value, command=field == "command"):
+    if not looks_like_mcp_path(value):
         return
+
+    if value.startswith("-") and "=" in value:
+        value = value.split("=", 1)[1]
+        if not looks_like_mcp_path(value):
+            return
 
     if value.startswith((placeholder_data, CLAUDE_PLUGIN_DATA)):
         data_placeholder = placeholder_data if value.startswith(placeholder_data) else CLAUDE_PLUGIN_DATA
@@ -673,9 +683,13 @@ def validate_mcp_path_value(
         else:
             return
     else:
-        portable_value = value.replace(placeholder_root, PORTABLE_PLUGIN_ROOT)
+        portable_value = value.replace(placeholder_root, PORTABLE_PLUGIN_ROOT, 1)
         resolved = resolve_plugin_relative_path(package_root, portable_value)
-        escaped = resolved is None or not ensure_within_root(package_root.resolve(), resolved)
+        escaped = (
+            Path(value).is_absolute()
+            or resolved is None
+            or not ensure_within_root(package_root.resolve(), resolved)
+        )
 
     if escaped:
         add_diagnostic(

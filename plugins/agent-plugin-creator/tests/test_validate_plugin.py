@@ -102,6 +102,27 @@ class ValidatePluginTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stderr, "")
 
+    def test_accepts_generated_stdio_plugin_relative_args_and_url_like_args(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(
+                temp_dir,
+                mcp_servers=[
+                    {
+                        "name": "demo",
+                        "config": {
+                            "type": "stdio",
+                            "command": "python3",
+                            "args": ["server.py", "https://example.com/api"],
+                            "cwd": "${PLUGIN_ROOT}",
+                        },
+                    }
+                ],
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rejects_manifest_with_unknown_top_level_field(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(temp_dir)
@@ -240,8 +261,8 @@ class ValidatePluginTest(unittest.TestCase):
                     "mcpServers": {
                         "demo": {
                             "type": "stdio",
-                            "command": "../outside/server",
-                            "args": ["--verbose", "../outside/script.py"],
+                            "command": "${PLUGIN_ROOT}/../outside/server",
+                            "args": ["--verbose", "../outside/script.py", "https://example.com/api"],
                             "cwd": "${PLUGIN_ROOT}",
                         }
                     },
