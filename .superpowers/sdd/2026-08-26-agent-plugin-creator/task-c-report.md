@@ -22,6 +22,12 @@ No existing tests or production files were modified.
   deterministic order: scaffold, validator, package.
 - The implementation stays offline and only imports local test files already
   committed in the repository.
+- Fix round 1 copies the creator plugin into a temporary workspace before
+  loading the bridged modules and rebinds their repository-derived `Path`
+  constants to that copy. This keeps subprocesses and fixture writes away
+  from tracked plugin files without changing the existing tests.
+- Added a final bridge assertion that compares the repository registry with
+  its pre-suite bytes after all bridged tests complete.
 
 ## Verification
 
@@ -80,6 +86,38 @@ git diff --check
 exit 0 with no output
 ```
 
+Fix-round verification:
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 37 tests in 4.308s
+OK
+```
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 37 tests in 4.255s
+OK
+```
+
+```text
+python3 -S -m unittest tests.test_plugin_suite -v
+```
+
+```text
+Ran 35 tests in 4.037s
+OK
+```
+
+The focused bridge suite also passed under `python3` in 4.122s with 35 tests. The
+registry-unchanged assertion passed at the end of each bridge execution.
+
 ## Self-review
 
 - Confirmed the bridge is limited to repository-level discovery and does not
@@ -90,3 +128,5 @@ exit 0 with no output
   `python3 -S`, so the bridge does not depend on site-packages bootstrapping.
 - Confirmed default discovery now includes both root tests and the bridged
   plugin-local tests from the repository root command.
+- Confirmed the bridged tests execute against a temporary plugin copy and the
+  tracked registry remains byte-for-byte unchanged after repeated discovery.

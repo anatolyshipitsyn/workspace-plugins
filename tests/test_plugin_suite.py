@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import shutil
+import tempfile
 import sys
 import types
 import unittest
@@ -13,6 +15,9 @@ PLUGIN_TESTS = (
     ("agent_plugin_creator_tests.test_validate_plugin", ROOT / "plugins" / "agent-plugin-creator" / "tests" / "test_validate_plugin.py"),
     ("agent_plugin_creator_tests.test_package", ROOT / "plugins" / "agent-plugin-creator" / "tests" / "test_package.py"),
 )
+REGISTRY_PATH = ROOT / "plugins" / "agent-plugin-creator" / "specs" / "registry.json"
+ORIGINAL_REGISTRY = REGISTRY_PATH.read_bytes()
+_ISOLATED_WORKSPACES: list[tempfile.TemporaryDirectory[str]] = []
 
 
 def _load_module(module_name: str, path: Path) -> types.ModuleType:
@@ -30,6 +35,34 @@ def _load_module(module_name: str, path: Path) -> types.ModuleType:
     return module
 
 
+def _load_isolated_plugin_tests() -> list[types.ModuleType]:
+    workspace = tempfile.TemporaryDirectory(prefix="agent-plugin-creator-tests-")
+    _ISOLATED_WORKSPACES.append(workspace)
+
+    isolated_root = Path(workspace.name)
+    isolated_plugin = isolated_root / "plugins" / "agent-plugin-creator"
+    source_plugin = ROOT / "plugins" / "agent-plugin-creator"
+
+    shutil.copytree(
+        source_plugin,
+        isolated_plugin,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+
+    modules = []
+    for module_name, path in PLUGIN_TESTS:
+        module = _load_module(module_name, path)
+        for name, value in vars(module).items():
+            if isinstance(value, Path):
+                try:
+                    relative_path = value.relative_to(ROOT)
+                except ValueError:
+                    continue
+                setattr(module, name, isolated_root / relative_path)
+        modules.append(module)
+    return modules
+
+
 def load_tests(
     loader: unittest.TestLoader,
     standard_tests: unittest.TestSuite,
@@ -40,7 +73,13 @@ def load_tests(
     suite = unittest.TestSuite()
     suite.addTests(standard_tests)
 
-    for module_name, path in PLUGIN_TESTS:
-        suite.addTests(loader.loadTestsFromModule(_load_module(module_name, path)))
+    for module in _load_isolated_plugin_tests():
+        suite.addTests(loader.loadTestsFromModule(module))
+
+    class DiscoveryIsolationTest(unittest.TestCase):
+        def test_bridged_tests_leave_repository_registry_unchanged(self) -> None:
+            self.assertEqual(REGISTRY_PATH.read_bytes(), ORIGINAL_REGISTRY)
+
+    suite.addTests(loader.loadTestsFromTestCase(DiscoveryIsolationTest))
 
     return suite
