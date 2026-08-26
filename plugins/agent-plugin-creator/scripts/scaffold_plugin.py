@@ -78,8 +78,8 @@ def load_release_metadata() -> tuple[str, str, str]:
             f"Latest release {latest_release!r} is missing source metadata in the local registry."
         )
 
-    plugin_schema_url = release_source.get("pluginSchema")
-    mcp_schema_url = release_source.get("mcpSchema")
+    plugin_schema_url = release_source.get("pluginSchemaId")
+    mcp_schema_url = release_source.get("mcpSchemaId")
     if not isinstance(plugin_schema_url, str) or not isinstance(mcp_schema_url, str):
         raise ScaffoldError(
             f"Latest release {latest_release!r} is missing canonical schema URLs."
@@ -124,13 +124,6 @@ def parse_skill_names(raw_skills: list[str]) -> list[str]:
     return skills
 
 
-def normalize_server_config(server_config: dict[str, Any]) -> dict[str, Any]:
-    config = dict(server_config)
-    if "type" not in config and "command" in config:
-        config["type"] = "stdio"
-    return config
-
-
 def parse_mcp_servers(raw_servers: list[str]) -> dict[str, dict[str, Any]]:
     servers: dict[str, dict[str, Any]] = {}
     for raw_server in raw_servers:
@@ -149,8 +142,10 @@ def parse_mcp_servers(raw_servers: list[str]) -> dict[str, dict[str, Any]]:
             raise ScaffoldError(
                 f"MCP server {name!r} must include a JSON object in the config field."
             )
+        if "type" not in config:
+            raise ScaffoldError(f"MCP server {name!r} must include a type field.")
 
-        servers[name] = normalize_server_config(config)
+        servers[name] = dict(config)
     return servers
 
 
