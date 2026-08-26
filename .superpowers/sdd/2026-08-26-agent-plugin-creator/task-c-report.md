@@ -118,6 +118,49 @@ OK
 The focused bridge suite also passed under `python3` in 4.122s with 35 tests. The
 registry-unchanged assertion passed at the end of each bridge execution.
 
+Fix-round 2 verification:
+
+```text
+python3 -m unittest tests.test_plugin_suite -v
+```
+
+```text
+Ran 36 tests in 4.062s
+OK
+```
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 38 tests in 4.302s
+OK
+```
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 38 tests in 4.323s
+OK
+```
+
+```text
+python3 -S -m unittest tests.test_plugin_suite -v
+```
+
+```text
+Ran 36 tests in 4.127s
+OK
+```
+
+The bridge now temporarily disables bytecode writes while dynamically loading
+the plugin test modules and restores the caller's prior setting in `finally`.
+The focused bridge suite's restoration assertion passed, and only generated
+`__pycache__` directories were removed after verification.
+
 ## Self-review
 
 - Confirmed the bridge is limited to repository-level discovery and does not
@@ -130,3 +173,5 @@ registry-unchanged assertion passed at the end of each bridge execution.
   plugin-local tests from the repository root command.
 - Confirmed the bridged tests execute against a temporary plugin copy and the
   tracked registry remains byte-for-byte unchanged after repeated discovery.
+- Confirmed dynamic imports restore `sys.dont_write_bytecode` and no repository
+  bytecode caches remain after cleanup.

@@ -17,6 +17,7 @@ PLUGIN_TESTS = (
 )
 REGISTRY_PATH = ROOT / "plugins" / "agent-plugin-creator" / "specs" / "registry.json"
 ORIGINAL_REGISTRY = REGISTRY_PATH.read_bytes()
+ORIGINAL_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
 _ISOLATED_WORKSPACES: list[tempfile.TemporaryDirectory[str]] = []
 
 
@@ -36,31 +37,36 @@ def _load_module(module_name: str, path: Path) -> types.ModuleType:
 
 
 def _load_isolated_plugin_tests() -> list[types.ModuleType]:
-    workspace = tempfile.TemporaryDirectory(prefix="agent-plugin-creator-tests-")
-    _ISOLATED_WORKSPACES.append(workspace)
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        workspace = tempfile.TemporaryDirectory(prefix="agent-plugin-creator-tests-")
+        _ISOLATED_WORKSPACES.append(workspace)
 
-    isolated_root = Path(workspace.name)
-    isolated_plugin = isolated_root / "plugins" / "agent-plugin-creator"
-    source_plugin = ROOT / "plugins" / "agent-plugin-creator"
+        isolated_root = Path(workspace.name)
+        isolated_plugin = isolated_root / "plugins" / "agent-plugin-creator"
+        source_plugin = ROOT / "plugins" / "agent-plugin-creator"
 
-    shutil.copytree(
-        source_plugin,
-        isolated_plugin,
-        ignore=shutil.ignore_patterns("__pycache__"),
-    )
+        shutil.copytree(
+            source_plugin,
+            isolated_plugin,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
 
-    modules = []
-    for module_name, path in PLUGIN_TESTS:
-        module = _load_module(module_name, path)
-        for name, value in vars(module).items():
-            if isinstance(value, Path):
-                try:
-                    relative_path = value.relative_to(ROOT)
-                except ValueError:
-                    continue
-                setattr(module, name, isolated_root / relative_path)
-        modules.append(module)
-    return modules
+        modules = []
+        for module_name, path in PLUGIN_TESTS:
+            module = _load_module(module_name, path)
+            for name, value in vars(module).items():
+                if isinstance(value, Path):
+                    try:
+                        relative_path = value.relative_to(ROOT)
+                    except ValueError:
+                        continue
+                    setattr(module, name, isolated_root / relative_path)
+            modules.append(module)
+        return modules
+    finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
 
 
 def load_tests(
@@ -79,6 +85,9 @@ def load_tests(
     class DiscoveryIsolationTest(unittest.TestCase):
         def test_bridged_tests_leave_repository_registry_unchanged(self) -> None:
             self.assertEqual(REGISTRY_PATH.read_bytes(), ORIGINAL_REGISTRY)
+
+        def test_bridge_restores_bytecode_setting(self) -> None:
+            self.assertEqual(sys.dont_write_bytecode, ORIGINAL_DONT_WRITE_BYTECODE)
 
     suite.addTests(loader.loadTestsFromTestCase(DiscoveryIsolationTest))
 
