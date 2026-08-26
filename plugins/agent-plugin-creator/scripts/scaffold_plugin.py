@@ -14,6 +14,8 @@ SPECS_ROOT = PLUGIN_ROOT / "specs"
 REGISTRY_PATH = SPECS_ROOT / "registry.json"
 CLAUDE_PLUGIN_DATA = "${CLAUDE_PLUGIN_DATA}"
 CLAUDE_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}"
+SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+SKILL_NAME_MAX_LENGTH = 64
 
 
 class ScaffoldError(Exception):
@@ -88,12 +90,19 @@ def load_release_metadata() -> tuple[str, str, str]:
     return latest_release, plugin_schema_url, mcp_schema_url
 
 
-def load_name_pattern(release: str) -> re.Pattern[str]:
+def load_plugin_name_constraints(release: str) -> tuple[int, int, re.Pattern[str]]:
     schema = read_json(SPECS_ROOT / release / "plugin.schema.json")
-    pattern = schema.get("properties", {}).get("name", {}).get("pattern")
-    if not isinstance(pattern, str):
-        raise ScaffoldError(f"Release {release!r} does not define a name pattern.")
-    return re.compile(pattern)
+    name_schema = schema.get("properties", {}).get("name", {})
+    pattern = name_schema.get("pattern")
+    min_length = name_schema.get("minLength")
+    max_length = name_schema.get("maxLength")
+    if (
+        not isinstance(pattern, str)
+        or not isinstance(min_length, int)
+        or not isinstance(max_length, int)
+    ):
+        raise ScaffoldError(f"Release {release!r} does not define complete name constraints.")
+    return min_length, max_length, re.compile(pattern)
 
 
 def parse_clients(raw_clients: str) -> list[str]:
@@ -118,10 +127,18 @@ def parse_skill_names(raw_skills: list[str]) -> list[str]:
     seen: set[str] = set()
     for raw_skill in raw_skills:
         skill_name = normalize_name(raw_skill)
+        validate_skill_name(skill_name)
         if skill_name not in seen:
             skills.append(skill_name)
             seen.add(skill_name)
     return skills
+
+
+def validate_skill_name(skill_name: str) -> None:
+    if len(skill_name) > SKILL_NAME_MAX_LENGTH or SKILL_NAME_PATTERN.fullmatch(skill_name) is None:
+        raise ScaffoldError(
+            "Skill names must be 1-64 characters of lowercase letters, digits, and single internal hyphens only."
+        )
 
 
 def parse_mcp_servers(raw_servers: list[str]) -> dict[str, dict[str, Any]]:
@@ -267,8 +284,12 @@ def scaffold_plugin(
     force: bool,
 ) -> Path:
     latest_release, plugin_schema_url, mcp_schema_url = load_release_metadata()
-    name_pattern = load_name_pattern(latest_release)
+    min_name_length, max_name_length, name_pattern = load_plugin_name_constraints(latest_release)
     normalized_name = normalize_name(name)
+    if len(normalized_name) < min_name_length or len(normalized_name) > max_name_length:
+        raise ScaffoldError(
+            f"Normalized plugin name {normalized_name!r} must be between {min_name_length} and {max_name_length} characters."
+        )
     if not name_pattern.fullmatch(normalized_name):
         raise ScaffoldError(
             f"Normalized plugin name {normalized_name!r} does not satisfy the latest release constraints."
@@ -287,7 +308,6 @@ def scaffold_plugin(
             "name": normalized_name,
             "version": "0.1.0",
             "description": description,
-            "license": "MIT",
             "keywords": ["agent-plugin"],
         },
         force=force,

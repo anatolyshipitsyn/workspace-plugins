@@ -439,7 +439,8 @@ class ValidatePluginTest(unittest.TestCase):
                 "---\n"
                 "name: review-skill\n"
                 "description: Review files\n"
-                "allowed-tools: [Read, Write]\n"
+                "compatibility: Requires python3 and git on PATH\n"
+                "allowed-tools: Read Bash(git:*)\n"
                 "metadata: {author: team, enabled: true}\n"
                 "---\n\nInstructions.\n",
                 encoding="utf-8",
@@ -448,6 +449,86 @@ class ValidatePluginTest(unittest.TestCase):
             result = run_validate(plugin_root, isolated=True)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_current_skill_frontmatter_rule_violations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            skill_md = plugin_root / "skills" / "review-skill" / "SKILL.md"
+
+            def write_skill(frontmatter_lines: list[str]) -> None:
+                skill_md.write_text(
+                    "---\n"
+                    + "\n".join(frontmatter_lines)
+                    + "\n---\n\nInstructions.\n",
+                    encoding="utf-8",
+                )
+
+            cases = [
+                (
+                    "compatibility-too-long",
+                    [
+                        "name: review-skill",
+                        "description: Review files",
+                        f"compatibility: {'x' * 501}",
+                    ],
+                    "compatibility",
+                    False,
+                ),
+                (
+                    "allowed-tools-must-be-string",
+                    [
+                        "name: review-skill",
+                        "description: Review files",
+                        "allowed-tools: [Read, Write]",
+                    ],
+                    "allowed-tools",
+                    True,
+                ),
+                (
+                    "name-must-not-have-consecutive-hyphens",
+                    [
+                        "name: review--skill",
+                        "description: Review files",
+                    ],
+                    "skill names",
+                    False,
+                ),
+                (
+                    "name-must-not-end-with-hyphen",
+                    [
+                        "name: review-skill-",
+                        "description: Review files",
+                    ],
+                    "skill names",
+                    False,
+                ),
+                (
+                    "name-must-not-exceed-64-characters",
+                    [
+                        f"name: {'a' * 65}",
+                        "description: Review files",
+                    ],
+                    "64",
+                    False,
+                ),
+                (
+                    "description-must-not-exceed-1024-characters",
+                    [
+                        "name: review-skill",
+                        f"description: {'d' * 1025}",
+                    ],
+                    "description",
+                    False,
+                ),
+            ]
+
+            for label, frontmatter_lines, needle, isolated in cases:
+                with self.subTest(label=label):
+                    write_skill(frontmatter_lines)
+                    result = run_validate(plugin_root, isolated=isolated)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("review-skill/SKILL.md", result.stdout)
+                    self.assertIn(needle, result.stdout.lower())
 
     def test_rejects_symlink_escape(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

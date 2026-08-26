@@ -81,7 +81,6 @@ class ScaffoldPluginTest(unittest.TestCase):
                     "name": "demo-plugin",
                     "version": "0.1.0",
                     "description": "Test plugin description",
-                    "license": "MIT",
                     "keywords": ["agent-plugin"],
                 },
             )
@@ -292,6 +291,28 @@ class ScaffoldPluginTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("type", result.stderr.lower())
 
+    def test_rejects_names_that_would_generate_invalid_packages(self) -> None:
+        overlong_name = "a" * 65
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir)
+            plugin_result = run_scaffold(destination, overlong_name, clients=["codex"])
+            self.assertNotEqual(plugin_result.returncode, 0)
+            self.assertIn("name", plugin_result.stderr.lower())
+            self.assertFalse((destination / overlong_name).exists())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir)
+            skill_result = run_scaffold(
+                destination,
+                "demo-plugin",
+                clients=["codex"],
+                skills=[overlong_name],
+            )
+            self.assertNotEqual(skill_result.returncode, 0)
+            self.assertIn("skill", skill_result.stderr.lower())
+            self.assertFalse((destination / "demo-plugin").exists())
+
     def test_rejects_symlink_destination_escape_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
@@ -343,7 +364,6 @@ class ScaffoldPluginTest(unittest.TestCase):
                 '  "name": "demo-plugin",\n'
                 '  "version": "0.1.0",\n'
                 '  "description": "Test plugin description",\n'
-                '  "license": "MIT",\n'
                 '  "keywords": [\n'
                 '    "agent-plugin"\n'
                 "  ]\n"

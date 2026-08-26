@@ -16,12 +16,22 @@ SCRIPT_PATH = Path(__file__).resolve()
 CREATOR_PLUGIN_ROOT = SCRIPT_PATH.parents[1]
 SPECS_ROOT = CREATOR_PLUGIN_ROOT / "specs"
 REGISTRY_PATH = SPECS_ROOT / "registry.json"
-SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
+SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+SKILL_NAME_MAX_LENGTH = 64
+SKILL_DESCRIPTION_MAX_LENGTH = 1024
+SKILL_COMPATIBILITY_MAX_LENGTH = 500
 CLAUDE_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}"
 CLAUDE_PLUGIN_DATA = "${CLAUDE_PLUGIN_DATA}"
 PORTABLE_PLUGIN_ROOT = "${PLUGIN_ROOT}"
 PORTABLE_PLUGIN_DATA = "${PLUGIN_DATA}"
-SKILL_FRONTMATTER_KEYS = {"name", "description", "license", "allowed-tools", "metadata"}
+SKILL_FRONTMATTER_KEYS = {
+    "name",
+    "description",
+    "license",
+    "compatibility",
+    "allowed-tools",
+    "metadata",
+}
 SECRET_PATTERNS = [
     re.compile(
         r"(?im)^[ \t]*[a-z0-9_.-]*(api[_-]?key|secret|token|password|passwd|private[_-]?key)[a-z0-9_.-]*[ \t]*[:=][ \t]*['\"]?[^\s'\"]{6,}"
@@ -457,12 +467,15 @@ def validate_skill_frontmatter(
         return
 
     normalized_name = name.strip()
-    if not SKILL_NAME_PATTERN.fullmatch(normalized_name) or "--" in normalized_name:
+    if (
+        len(normalized_name) > SKILL_NAME_MAX_LENGTH
+        or SKILL_NAME_PATTERN.fullmatch(normalized_name) is None
+    ):
         add_diagnostic(
             diagnostics,
             package_root,
             skill_md,
-            "Skill names must use lowercase letters, digits, and single hyphens only.",
+            "Skill names must be 1-64 characters of lowercase letters, digits, and single internal hyphens only.",
             "Rename the skill and frontmatter name to a valid hyphen-case identifier.",
         )
 
@@ -494,6 +507,45 @@ def validate_skill_frontmatter(
             skill_md,
             "Skill frontmatter must define a non-empty string description.",
             "Add a concise description explaining when the skill applies.",
+        )
+    elif len(description) > SKILL_DESCRIPTION_MAX_LENGTH:
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            skill_md,
+            "Skill description must be between 1 and 1024 characters.",
+            "Shorten the description so it stays within the current Agent Skills limit.",
+        )
+
+    compatibility = frontmatter.get("compatibility")
+    if compatibility is not None:
+        if not isinstance(compatibility, str) or not compatibility.strip():
+            add_diagnostic(
+                diagnostics,
+                package_root,
+                skill_md,
+                "Skill compatibility must be a non-empty string when present.",
+                "Set compatibility to a concise string or remove the field.",
+            )
+        elif len(compatibility) > SKILL_COMPATIBILITY_MAX_LENGTH:
+            add_diagnostic(
+                diagnostics,
+                package_root,
+                skill_md,
+                "Skill compatibility must be between 1 and 500 characters when present.",
+                "Shorten the compatibility note or remove the field.",
+            )
+
+    allowed_tools = frontmatter.get("allowed-tools")
+    if allowed_tools is not None and (
+        not isinstance(allowed_tools, str) or not allowed_tools.strip()
+    ):
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            skill_md,
+            "Skill allowed-tools must be a non-empty space-separated string when present.",
+            "Encode allowed-tools as a single string or remove the field.",
         )
 
 
