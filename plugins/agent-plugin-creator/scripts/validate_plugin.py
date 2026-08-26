@@ -320,18 +320,31 @@ def parse_simple_frontmatter(frontmatter_text: str) -> dict[str, Any]:
             parsed_value = value[1:-1]
         elif value in {"true", "false"}:
             parsed_value = value == "true"
+        elif value in {"|", ">"}:
+            nested, index = consume_indented_block(lines, index)
+            parsed_value = parse_simple_block_scalar(nested, value)
         elif value.startswith("[") or value.startswith("{"):
             parsed_value = parse_simple_flow_value(value)
         elif not value:
-            nested: list[str] = []
-            while index < len(lines) and (not lines[index].strip() or lines[index].startswith((" ", "\t"))):
-                nested.append(lines[index])
-                index += 1
+            nested, index = consume_indented_block(lines, index)
             parsed_value = parse_simple_block_value(nested)
         else:
             parsed_value = value
         result[key] = parsed_value
     return result
+
+
+def consume_indented_block(lines: list[str], start_index: int) -> tuple[list[str], int]:
+    nested: list[str] = []
+    index = start_index
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith((" ", "\t")) or not line.strip():
+            nested.append(line)
+            index += 1
+            continue
+        break
+    return nested, index
 
 
 def split_simple_flow_items(value: str) -> list[str]:
@@ -405,6 +418,53 @@ def parse_simple_block_value(lines: list[str]) -> Any:
             result[parse_simple_scalar(key)] = parse_simple_scalar(value)
         return result
     raise ValidationFailure("Skill frontmatter contains an unsupported indented value.")
+
+
+def parse_simple_block_scalar(lines: list[str], style: str) -> str:
+    meaningful = [line for line in lines if line.strip()]
+    if not meaningful:
+        raise ValidationFailure("Skill frontmatter block scalar must contain an indented value.")
+
+    indentation = min(
+        len(line) - len(line.lstrip(" \t"))
+        for line in meaningful
+    )
+    if indentation == 0:
+        raise ValidationFailure("Skill frontmatter block scalar must contain an indented value.")
+
+    normalized_lines: list[str] = []
+    for line in lines:
+        if line.strip():
+            current_indentation = len(line) - len(line.lstrip(" \t"))
+            if current_indentation < indentation:
+                raise ValidationFailure("Skill frontmatter block scalar indentation is malformed.")
+            normalized_lines.append(line[indentation:])
+        else:
+            normalized_lines.append("")
+
+    if style == "|":
+        return "\n".join(normalized_lines).strip("\n")
+    return fold_simple_block_scalar(normalized_lines)
+
+
+def fold_simple_block_scalar(lines: list[str]) -> str:
+    folded: list[str] = []
+    paragraph: list[str] = []
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            folded.append(" ".join(paragraph))
+            paragraph.clear()
+
+    for line in lines:
+        if line == "":
+            flush_paragraph()
+            if folded and folded[-1] != "":
+                folded.append("")
+            continue
+        paragraph.append(line)
+    flush_paragraph()
+    return "\n".join(folded).strip("\n")
 
 
 def validate_skill_frontmatter(
@@ -1081,36 +1141,44 @@ def contains_python_secret_material(content: str) -> bool:
     except SyntaxError:
         return contains_python_text_secret_material(content)
 
-    def is_concrete_secret_key(value: str) -> bool:
-        return value.strip().lower() not in {"secret", "token", "password"} and bool(
-            SECRET_KEY_PATTERN.search(value)
-        )
-
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
-                if isinstance(target, ast.Name) and is_concrete_secret_key(target.id):
+                if isinstance(target, ast.Name) and SECRET_KEY_PATTERN.search(target.id):
                     if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
                         return is_obvious_secret_value(node.value.value)
-        if isinstance(node, ast.Dict):
-            for key, child in zip(node.keys, node.values):
-                if isinstance(key, ast.Constant) and isinstance(key.value, str) and is_concrete_secret_key(key.value):
-                    if isinstance(child, ast.Constant) and isinstance(child.value, str):
-                        return is_obvious_secret_value(child.value)
+            if node.value is not None and contains_python_secret_dict_literal(node.value):
+                return True
     return False
 
 
 def contains_python_text_secret_material(content: str) -> bool:
     assignment_pattern = re.compile(
-        r"(?im)^[ \t]*([a-z_][a-z0-9_-]*(?:api[_-]?key|secret|token|password|passwd|private[_-]?key)[a-z0-9_-]*)"
+        r"(?im)^([a-z_][a-z0-9_-]*(?:api[_-]?key|secret|token|password|passwd|private[_-]?key)[a-z0-9_-]*)"
         r"[ \t]*=[ \t]*(?:\"([^\"\n]{6,})\"|'([^'\n]{6,})'|([^\s#]{6,}))"
     )
     for match in assignment_pattern.finditer(content):
-        key = match.group(1)
         value = next(group for group in match.groups()[1:] if group is not None)
-        if key.lower() not in {"secret", "token", "password"} and is_obvious_secret_value(value):
+        if is_obvious_secret_value(value):
             return True
+    return False
+
+
+def contains_python_secret_dict_literal(node: ast.AST) -> bool:
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Dict):
+            continue
+        for key, value in zip(child.keys, child.values):
+            if (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and SECRET_KEY_PATTERN.search(key.value)
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+                and is_obvious_secret_value(value.value)
+            ):
+                return True
     return False
 
 

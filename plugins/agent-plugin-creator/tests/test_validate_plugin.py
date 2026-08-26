@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -13,6 +15,26 @@ SCAFFOLD_SCRIPT = PLUGIN_ROOT / "scripts" / "scaffold_plugin.py"
 VALIDATE_SCRIPT = PLUGIN_ROOT / "scripts" / "validate_plugin.py"
 PLUGIN_SCHEMA_ID = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 MCP_SCHEMA_ID = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+_TEST_ROOT = Path(__file__).parent
+_PRIOR_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
+
+# Direct unittest execution should not leave repository-local bytecode that
+# changes self-validation results mid-run.
+sys.dont_write_bytecode = True
+
+
+def _remove_local_bytecode() -> None:
+    for bytecode_path in _TEST_ROOT.rglob("*.pyc"):
+        bytecode_path.unlink(missing_ok=True)
+    for cache_dir in sorted(_TEST_ROOT.rglob("__pycache__"), reverse=True):
+        try:
+            cache_dir.rmdir()
+        except OSError:
+            continue
+
+
+_remove_local_bytecode()
+atexit.register(_remove_local_bytecode)
 
 
 def run_scaffold(
@@ -431,6 +453,29 @@ class ValidatePluginTest(unittest.TestCase):
             self.assertIn("secret", result.stdout.lower())
             self.assertNotIn(secret, result.stdout)
 
+    def test_rejects_exact_python_secret_names_with_literal_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            literals = [
+                "sk-live-1234567890",
+                "ghp_1234567890token",
+                "super-secret-value",
+            ]
+            (plugin_root / "settings.py").write_text(
+                'password = "sk-live-1234567890"\n'
+                'token = "ghp_1234567890token"\n'
+                'secret = "super-secret-value"\n',
+                encoding="utf-8",
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("settings.py", result.stdout)
+            self.assertIn("secret", result.stdout.lower())
+            for literal in literals:
+                self.assertNotIn(literal, result.stdout)
+
     def test_accepts_flow_frontmatter_without_yaml_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(temp_dir)
@@ -442,6 +487,33 @@ class ValidatePluginTest(unittest.TestCase):
                 "compatibility: Requires python3 and git on PATH\n"
                 "allowed-tools: Read Bash(git:*)\n"
                 "metadata: {author: team, enabled: enabled}\n"
+                "---\n\nInstructions.\n",
+                encoding="utf-8",
+            )
+
+            result = run_validate(plugin_root, isolated=True)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_accepts_yaml_block_scalars_without_yaml_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            skill_md = plugin_root / "skills" / "review-skill" / "SKILL.md"
+            skill_md.write_text(
+                "---\n"
+                "name: review-skill\n"
+                "description: |\n"
+                "  Review files carefully.\n"
+                "  Keep edits scoped.\n"
+                "compatibility: >\n"
+                "  Requires python3 and git\n"
+                "  on PATH\n"
+                "allowed-tools: >\n"
+                "  Read\n"
+                "  Bash(git:*)\n"
+                "metadata:\n"
+                "  author: team\n"
+                "  enabled: enabled\n"
                 "---\n\nInstructions.\n",
                 encoding="utf-8",
             )
@@ -633,4 +705,5 @@ class ValidatePluginTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    sys.dont_write_bytecode = _PRIOR_DONT_WRITE_BYTECODE
     unittest.main()
