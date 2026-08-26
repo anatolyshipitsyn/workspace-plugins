@@ -161,6 +161,41 @@ the plugin test modules and restores the caller's prior setting in `finally`.
 The focused bridge suite's restoration assertion passed, and only generated
 `__pycache__` directories were removed after verification.
 
+Fix-round 3 verification:
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 38 tests in 5.014s
+OK
+```
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 38 tests in 5.016s
+OK
+```
+
+```text
+python3 -S -m unittest tests.test_plugin_suite -v
+```
+
+```text
+Ran 36 tests in 4.861s
+OK
+```
+
+`tests/__init__.py` now enables `sys.dont_write_bytecode` before unittest
+imports repository test modules and registers cleanup for its own package
+cache. The bridge continues to restore the prior bytecode setting in
+`finally`; the registry assertion passed and no repository `__pycache__` or
+`.pyc` artifacts remained after the runs.
+
 ## Self-review
 
 - Confirmed the bridge is limited to repository-level discovery and does not
@@ -175,3 +210,6 @@ The focused bridge suite's restoration assertion passed, and only generated
   tracked registry remains byte-for-byte unchanged after repeated discovery.
 - Confirmed dynamic imports restore `sys.dont_write_bytecode` and no repository
   bytecode caches remain after cleanup.
+- Confirmed the package-level guard runs before discovered test imports and
+  default discovery leaves no repository bytecode artifacts or registry
+  mutation.
