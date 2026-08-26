@@ -111,3 +111,24 @@ script and URL-like arguments, and rejects command/argument traversal and
 detection and dependency-independent frontmatter fallback remain covered.
 
 `git diff --check` passed with exit code `0`.
+
+## Fix round 3 verification
+
+The validator now uses syntax-aware Python inspection for concrete credential
+assignments and structured JSON inspection for configuration values. It does not
+exclude scripts or tests: the regression suite confirms the creator package
+self-validates, while a real `OPENAI_API_KEY` assignment in a generated Python
+file, JSON header, config file, and `.env` file is still rejected.
+
+Commands:
+
+```bash
+python3 -m unittest plugins/agent-plugin-creator/tests/test_validate_plugin.py -v
+python3 -S -m unittest plugins/agent-plugin-creator/tests/test_validate_plugin.py -v
+git diff --check
+```
+
+Results:
+
+- Both unittest commands: `Ran 13 tests` — `OK` (`1.851s` and `1.852s`).
+- `git diff --check`: exit code `0`, no output.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 from pathlib import Path
@@ -22,7 +23,7 @@ PORTABLE_PLUGIN_DATA = "${PLUGIN_DATA}"
 SKILL_FRONTMATTER_KEYS = {"name", "description", "license", "allowed-tools", "metadata"}
 SECRET_PATTERNS = [
     re.compile(
-        r"(?i)\b[a-z0-9_-]*(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*['\"]?[^\s'\"]{6,}"
+        r"(?im)^[ \t]*[a-z0-9_.-]*(api[_-]?key|secret|token|password|passwd|private[_-]?key)[a-z0-9_.-]*[ \t]*[:=][ \t]*['\"]?[^\s'\"]{6,}"
     ),
     re.compile(r"(?i)\bauthorization\b\s*[:=]\s*['\"]?(?:bearer|basic)\s+[^\s'\"]+"),
 ]
@@ -969,6 +970,39 @@ def contains_structured_secret(value: Any, key_name: str | None = None) -> bool:
     return False
 
 
+def contains_python_secret_material(content: str) -> bool:
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return False
+
+    def is_concrete_secret_key(value: str) -> bool:
+        return value.strip().lower() not in {"secret", "token", "password"} and bool(
+            SECRET_KEY_PATTERN.search(value)
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and is_concrete_secret_key(target.id):
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        return is_obvious_secret_value(node.value.value)
+        if isinstance(node, ast.Dict):
+            for key, child in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and isinstance(key.value, str) and is_concrete_secret_key(key.value):
+                    if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                        return is_obvious_secret_value(child.value)
+    return False
+
+
+def is_obvious_secret_value(value: str) -> bool:
+    normalized = value.strip().lower()
+    return len(value.strip()) >= 6 and not normalized.startswith(
+        ("${", "<", "your-", "replace-", "example")
+    )
+
+
 def validate_secret_material(diagnostics: list[Diagnostic], package_root: Path) -> None:
     for file_path in iter_text_files(package_root):
         if file_path.is_symlink():
@@ -989,7 +1023,10 @@ def validate_secret_material(diagnostics: list[Diagnostic], package_root: Path) 
         except OSError:
             continue
 
-        has_secret = any(pattern.search(content) for pattern in SECRET_PATTERNS)
+        if file_path.suffix.lower() == ".py":
+            has_secret = contains_python_secret_material(content)
+        else:
+            has_secret = any(pattern.search(content) for pattern in SECRET_PATTERNS)
         if file_path.suffix.lower() == ".json":
             try:
                 has_secret = has_secret or contains_structured_secret(json.loads(content))

@@ -123,6 +123,11 @@ class ValidatePluginTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_accepts_creator_package_without_suppressing_real_secret_checks(self) -> None:
+        result = run_validate(PLUGIN_ROOT)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rejects_manifest_with_unknown_top_level_field(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(temp_dir)
@@ -363,6 +368,9 @@ class ValidatePluginTest(unittest.TestCase):
             plugin_root = self.scaffold_plugin(temp_dir)
             (plugin_root / ".env").write_text("OPENAI_API_KEY=super-secret-value\n", encoding="utf-8")
             (plugin_root / "config.txt").write_text("db_password=super-secret-value\n", encoding="utf-8")
+            (plugin_root / "settings.py").write_text(
+                'OPENAI_API_KEY = "super-secret-value"\n', encoding="utf-8"
+            )
 
             result = run_validate(plugin_root)
 
