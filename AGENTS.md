@@ -6,10 +6,10 @@ This repository stores portable Agent Plugins for use across projects and
 clients, including Codex and Claude Code.
 
 Portable plugin components belong under `plugins/<plugin-name>/` and must
-follow the latest published Agent Plugins specification supported by the
-repository's local registry. The portable manifest is `plugin.json` at the
-plugin root. Skills belong under `skills/`, and portable MCP configuration
-belongs in `mcp.json`.
+follow the latest published Agent Plugins release supported by the
+repository's local registry, rather than a hard-coded specification version.
+The portable manifest is `plugin.json` at the plugin root. Skills belong under
+`skills/`, and portable MCP configuration belongs in `mcp.json`.
 
 Claude Code compatibility is provided by the minimal client-specific files
 `.claude-plugin/plugin.json` and, when needed, `.mcp.json`. Shared skills and
@@ -71,7 +71,8 @@ When a decision is made during implementation, record:
 
 Before declaring a plugin complete, verify at minimum:
 
-- `plugin.json` is valid and conforms to the Agent Plugins schema;
+- `plugin.json` is valid and conforms to the schema for the latest published
+  release selected by the local registry;
 - every discovered `SKILL.md` is valid;
 - `mcp.json` and `.mcp.json` are valid when present;
 - no package path escapes the plugin root;
