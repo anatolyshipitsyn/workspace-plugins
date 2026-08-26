@@ -911,7 +911,7 @@ def validate_mcp_file(
             "Set mcp $schema to the canonical schema id for the selected release.",
         )
 
-    mcp_servers = raw_data.get("mcpServers")
+    mcp_servers = normalized_data.get("mcpServers")
     if not isinstance(mcp_servers, dict):
         return
 

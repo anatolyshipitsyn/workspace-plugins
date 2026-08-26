@@ -21,7 +21,11 @@ Implemented Task A only within the allowed write set:
 - Updated remote transport validation to allow loopback HTTP, reject URL
   fragments, and keep rejecting placeholders, embedded credentials, and
   invalid non-absolute URLs.
+- Applied the same remote URL checks to Claude `.mcp.json` entries after
+  normalizing Claude `http` to portable `streamable-http`.
 - Added focused regression coverage for the new scaffold and validator rules.
+- Added regression coverage rejecting invalid Claude HTTP URLs with fragments,
+  embedded credentials, or non-loopback plain HTTP.
 
 ## Verification
 
@@ -33,12 +37,18 @@ Passed:
 - `python3 -S -m unittest plugins/agent-plugin-creator/tests/test_validate_plugin.py -v`
 - `git diff --check`
 
+Fix-round verification also passed:
+
+- `python3 -m unittest plugins/agent-plugin-creator/tests/test_validate_plugin.py -v`
+
 ## Self-review
 
 - Confirmed the portable MCP file is still rendered directly from the portable
   config and only the Claude adapter applies transport-name conversion.
 - Confirmed validator normalization is scoped to `.mcp.json`, so portable
   `mcp.json` still enforces the bundled 1.0.0 schema unchanged.
+- Confirmed semantic MCP dispatch uses the normalized Claude server entries, so
+  Claude `http` URLs receive the same checks as portable remote transports.
 - Kept existing symlink containment, reserved-variable checks, and secret
   detection intact.
 

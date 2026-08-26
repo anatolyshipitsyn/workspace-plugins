@@ -154,6 +154,43 @@ class ValidatePluginTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_rejects_invalid_claude_http_urls(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(
+                temp_dir,
+                clients=["codex", "claude"],
+                mcp_servers=[
+                    {
+                        "name": "demo",
+                        "config": {
+                            "type": "streamable-http",
+                            "url": "https://example.com/mcp",
+                        },
+                    }
+                ],
+            )
+
+            claude_mcp_path = plugin_root / ".mcp.json"
+            cases = [
+                ("fragment", "https://example.com/mcp#fragment"),
+                ("credentials", "https://user:password@example.com/mcp"),
+                ("non-loopback-http", "http://example.com/mcp"),
+            ]
+            for label, url in cases:
+                with self.subTest(label=label):
+                    claude_mcp = read_json(claude_mcp_path)
+                    mcp_servers = claude_mcp["mcpServers"]
+                    assert isinstance(mcp_servers, dict)
+                    demo = mcp_servers["demo"]
+                    assert isinstance(demo, dict)
+                    demo["url"] = url
+                    write_json(claude_mcp_path, claude_mcp)
+
+                    result = run_validate(plugin_root)
+
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("demo", result.stdout)
+
     def test_accepts_creator_package_without_suppressing_real_secret_checks(self) -> None:
         result = run_validate(PLUGIN_ROOT)
 
