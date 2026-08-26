@@ -200,6 +200,15 @@ def translate_for_claude(value: Any) -> Any:
     return value
 
 
+def translate_mcp_server_for_claude(server_config: dict[str, Any]) -> dict[str, Any]:
+    translated = {
+        key: translate_for_claude(value) for key, value in server_config.items()
+    }
+    if translated.get("type") == "streamable-http":
+        translated["type"] = "http"
+    return translated
+
+
 def render_json(path: Path, data: dict[str, Any], *, force: bool, plugin_root: Path) -> None:
     resolved_path = path.resolve(strict=False)
     try:
@@ -317,9 +326,16 @@ def scaffold_plugin(
             plugin_root=plugin_root,
         )
         if "claude" in clients:
+            claude_mcp = {
+                "$schema": mcp_schema_url,
+                "mcpServers": {
+                    name: translate_mcp_server_for_claude(server_config)
+                    for name, server_config in mcp_servers.items()
+                },
+            }
             render_json(
                 plugin_root / ".mcp.json",
-                translate_for_claude(portable_mcp),
+                claude_mcp,
                 force=force,
                 plugin_root=plugin_root,
             )

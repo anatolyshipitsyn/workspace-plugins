@@ -188,6 +188,55 @@ class ScaffoldPluginTest(unittest.TestCase):
             self.assertFalse((no_mcp_root / "mcp.json").exists())
             self.assertFalse((no_mcp_root / ".mcp.json").exists())
 
+    def test_converts_streamable_http_transport_for_claude_adapter(self) -> None:
+        server_config = {
+            "type": "streamable-http",
+            "url": "https://example.com/mcp",
+            "headers": {
+                "X-Tenant": "public",
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir)
+            result = run_scaffold(
+                destination,
+                "demo-plugin",
+                clients=["codex", "claude"],
+                mcp_servers=[{"name": "demo", "config": server_config}],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            plugin_root = destination / "demo-plugin"
+            portable_mcp = json.loads((plugin_root / "mcp.json").read_text(encoding="utf-8"))
+            claude_mcp = json.loads((plugin_root / ".mcp.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                portable_mcp,
+                {
+                    "$schema": MCP_SCHEMA_ID,
+                    "mcpServers": {
+                        "demo": server_config,
+                    },
+                },
+            )
+            self.assertEqual(
+                claude_mcp,
+                {
+                    "$schema": MCP_SCHEMA_ID,
+                    "mcpServers": {
+                        "demo": {
+                            "type": "http",
+                            "url": "https://example.com/mcp",
+                            "headers": {
+                                "X-Tenant": "public",
+                            },
+                        },
+                    },
+                },
+            )
+
     def test_refuses_existing_output_without_force(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             destination = Path(temp_dir)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -567,6 +568,19 @@ def normalize_mcp_placeholders(value: Any, placeholder_root: str, placeholder_da
     return value
 
 
+def normalize_claude_http_aliases(value: Any) -> Any:
+    if isinstance(value, list):
+        return [normalize_claude_http_aliases(item) for item in value]
+    if isinstance(value, dict):
+        normalized = {
+            key: normalize_claude_http_aliases(item) for key, item in value.items()
+        }
+        if normalized.get("type") == "http" and "url" in normalized:
+            normalized["type"] = "streamable-http"
+        return normalized
+    return value
+
+
 def validate_json_schema(
     diagnostics: list[Diagnostic],
     package_root: Path,
@@ -647,59 +661,67 @@ def contains_dotdot_suffix(raw_path: str, prefix: str) -> bool:
     return ".." in Path(suffix).parts
 
 
-def looks_like_mcp_path(value: str) -> bool:
-    """Return whether an MCP value should be checked as a filesystem path.
-
-    Bare relative values are checked because they may be package scripts, while
-    URI schemes and option flags are ordinary non-filesystem arguments.
-    """
-    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value):
-        return False
-    return not value.startswith("-") or "=" in value
-
-
-def validate_mcp_path_value(
+def validate_stdio_command(
     diagnostics: list[Diagnostic],
     package_root: Path,
     target_path: Path,
     server_name: str,
-    field: str,
-    value: str,
+    command: str,
     *,
     placeholder_root: str,
     placeholder_data: str,
 ) -> None:
-    if not looks_like_mcp_path(value):
-        return
-
-    if value.startswith("-") and "=" in value:
-        value = value.split("=", 1)[1]
-        if not looks_like_mcp_path(value):
-            return
-
-    if value.startswith((placeholder_data, CLAUDE_PLUGIN_DATA)):
-        data_placeholder = placeholder_data if value.startswith(placeholder_data) else CLAUDE_PLUGIN_DATA
-        if contains_dotdot_suffix(value, data_placeholder):
-            escaped = True
-        else:
-            return
-    else:
-        portable_value = value.replace(placeholder_root, PORTABLE_PLUGIN_ROOT, 1)
-        resolved = resolve_plugin_relative_path(package_root, portable_value)
-        escaped = (
-            Path(value).is_absolute()
-            or resolved is None
-            or not ensure_within_root(package_root.resolve(), resolved)
-        )
-
-    if escaped:
+    if command.startswith((placeholder_root, placeholder_data, CLAUDE_PLUGIN_ROOT, CLAUDE_PLUGIN_DATA)):
         add_diagnostic(
             diagnostics,
             package_root,
             target_path,
-            f"mcp server {server_name!r} {field} contains a filesystem path outside the plugin root.",
-            f"Keep {field} executable and script paths inside the plugin package.",
+            f"mcp server {server_name!r} command must be bare or ./-relative and must not use placeholders.",
+            "Use a bare executable name or a ./-relative path in command.",
         )
+        return
+
+    if Path(command).is_absolute():
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            target_path,
+            f"mcp server {server_name!r} command must not be an absolute path.",
+            "Use a bare executable name or a ./-relative path in command.",
+        )
+        return
+
+    if command.startswith("./"):
+        resolved = resolve_plugin_relative_path(package_root, command)
+        if resolved is None or not ensure_within_root(package_root.resolve(), resolved):
+            add_diagnostic(
+                diagnostics,
+                package_root,
+                target_path,
+                f"mcp server {server_name!r} command escapes plugin-root containment.",
+                "Keep the ./-relative command path inside the plugin package.",
+            )
+        return
+
+    if "/" in command or "\\" in command:
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            target_path,
+            f"mcp server {server_name!r} command must be a bare executable or start with ./.",
+            "Rewrite command as a bare executable name or a ./-relative path.",
+        )
+
+
+def is_loopback_hostname(hostname: str | None) -> bool:
+    if hostname is None:
+        return False
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def validate_stdio_server(
@@ -723,20 +745,10 @@ def validate_stdio_server(
             "Put the executable in command and pass extra tokens through args.",
         )
     if isinstance(command, str):
-        validate_mcp_path_value(
-            diagnostics, package_root, target_path, server_name, "command", command,
+        validate_stdio_command(
+            diagnostics, package_root, target_path, server_name, command,
             placeholder_root=placeholder_root, placeholder_data=placeholder_data,
         )
-
-    args = server_config.get("args")
-    if isinstance(args, list):
-        for index, argument in enumerate(args):
-            if not isinstance(argument, str) or not looks_like_mcp_path(argument):
-                continue
-            validate_mcp_path_value(
-                diagnostics, package_root, target_path, server_name, f"args[{index}]", argument,
-                placeholder_root=placeholder_root, placeholder_data=placeholder_data,
-            )
 
     env = server_config.get("env")
     if isinstance(env, dict):
@@ -814,13 +826,32 @@ def validate_remote_server(
         return
 
     parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.netloc:
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
         add_diagnostic(
             diagnostics,
             package_root,
             target_path,
-            f"mcp server {server_name!r} remote transport must use a valid HTTPS URL.",
-            "Set url to an HTTPS endpoint with a host name.",
+            f"mcp server {server_name!r} remote transport must use a valid absolute HTTP or HTTPS URL.",
+            "Set url to an absolute HTTP or HTTPS endpoint with a host name.",
+        )
+        return
+
+    if parsed.fragment:
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            target_path,
+            f"mcp server {server_name!r} remote URL must not contain a fragment.",
+            "Remove the fragment from the MCP endpoint URL.",
+        )
+
+    if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            target_path,
+            f"mcp server {server_name!r} remote HTTP URLs are limited to loopback hosts.",
+            "Use HTTPS for non-loopback hosts or point HTTP at localhost or a loopback IP.",
         )
     if parsed.username or parsed.password:
         add_diagnostic(
@@ -865,6 +896,8 @@ def validate_mcp_file(
         return
 
     normalized_data = normalize_mcp_placeholders(raw_data, placeholder_root, placeholder_data)
+    if placeholder_root == CLAUDE_PLUGIN_ROOT:
+        normalized_data = normalize_claude_http_aliases(normalized_data)
     schema_path = SPECS_ROOT / release / "mcp.schema.json"
     validate_json_schema(diagnostics, package_root, target_path, normalized_data, schema_path)
 

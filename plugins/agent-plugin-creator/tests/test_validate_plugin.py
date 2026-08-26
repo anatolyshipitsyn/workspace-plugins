@@ -102,18 +102,49 @@ class ValidatePluginTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stderr, "")
 
-    def test_accepts_generated_stdio_plugin_relative_args_and_url_like_args(self) -> None:
+    def test_accepts_stdio_command_forms_and_treats_args_as_opaque(self) -> None:
+        for command in ("python3", "./bin/server"):
+            with self.subTest(command=command):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    plugin_root = self.scaffold_plugin(
+                        temp_dir,
+                        mcp_servers=[
+                            {
+                                "name": "demo",
+                                "config": {
+                                    "type": "stdio",
+                                    "command": command,
+                                    "args": [
+                                        "../outside/script.py",
+                                        "/tmp/outside-script.py",
+                                        "${PLUGIN_ROOT}/config.json",
+                                        "--path=../outside.cfg",
+                                        "https://example.com/api",
+                                    ],
+                                    "cwd": "${PLUGIN_ROOT}",
+                                },
+                            }
+                        ],
+                    )
+
+                    result = run_validate(plugin_root)
+
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_accepts_generated_claude_http_adapter_from_streamable_http(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(
                 temp_dir,
+                clients=["codex", "claude"],
                 mcp_servers=[
                     {
                         "name": "demo",
                         "config": {
-                            "type": "stdio",
-                            "command": "python3",
-                            "args": ["server.py", "https://example.com/api"],
-                            "cwd": "${PLUGIN_ROOT}",
+                            "type": "streamable-http",
+                            "url": "https://example.com/mcp",
+                            "headers": {
+                                "X-Tenant": "public",
+                            },
                         },
                     }
                 ],
@@ -243,7 +274,7 @@ class ValidatePluginTest(unittest.TestCase):
             self.assertIn("reserved", result.stdout.lower())
             self.assertIn("cwd", result.stdout.lower())
 
-    def test_rejects_mcp_command_and_argument_path_escapes_but_keeps_flags_valid(self) -> None:
+    def test_rejects_plugin_root_placeholder_in_stdio_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(
                 temp_dir,
@@ -266,8 +297,8 @@ class ValidatePluginTest(unittest.TestCase):
                     "mcpServers": {
                         "demo": {
                             "type": "stdio",
-                            "command": "${PLUGIN_ROOT}/../outside/server",
-                            "args": ["--verbose", "../outside/script.py", "https://example.com/api"],
+                            "command": "${PLUGIN_ROOT}/bin/server",
+                            "args": ["../outside/script.py", "/tmp/outside-script.py"],
                             "cwd": "${PLUGIN_ROOT}",
                         }
                     },
@@ -277,8 +308,67 @@ class ValidatePluginTest(unittest.TestCase):
             result = run_validate(plugin_root)
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertGreaterEqual(result.stdout.lower().count("filesystem path"), 2)
+            self.assertIn("command", result.stdout.lower())
             self.assertNotIn("args[0]", result.stdout)
+
+    def test_accepts_loopback_http_urls_and_rejects_fragments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(
+                temp_dir,
+                mcp_servers=[
+                    {
+                        "name": "demo",
+                        "config": {
+                            "type": "streamable-http",
+                            "url": "https://example.com/mcp",
+                        },
+                    }
+                ],
+            )
+
+            mcp_path = plugin_root / "mcp.json"
+            cases = [
+                (
+                    "loopback-http",
+                    {
+                        "$schema": MCP_SCHEMA_ID,
+                        "mcpServers": {
+                            "demo": {
+                                "type": "streamable-http",
+                                "url": "http://127.0.0.1:8787/mcp",
+                            }
+                        },
+                    },
+                    0,
+                    None,
+                ),
+                (
+                    "fragment-rejected",
+                    {
+                        "$schema": MCP_SCHEMA_ID,
+                        "mcpServers": {
+                            "demo": {
+                                "type": "streamable-http",
+                                "url": "https://example.com/mcp#fragment",
+                            }
+                        },
+                    },
+                    1,
+                    "fragment",
+                ),
+            ]
+
+            for label, payload, expected_code, needle in cases:
+                with self.subTest(label=label):
+                    write_json(mcp_path, payload)
+                    result = run_validate(plugin_root)
+                    self.assertEqual(
+                        result.returncode,
+                        expected_code,
+                        result.stdout + result.stderr,
+                    )
+                    if needle is not None:
+                        self.assertIn(needle, result.stdout.lower())
 
     def test_rejects_quoted_json_secret_values_without_echoing_them(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
