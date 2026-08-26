@@ -366,6 +366,10 @@ def parse_simple_scalar(value: str) -> Any:
         return False
     if value in {"null", "~"}:
         return None
+    if re.fullmatch(r"[-+]?\d+", value):
+        return int(value)
+    if re.fullmatch(r"[-+]?(?:\d+\.\d*|\.\d+)", value):
+        return float(value)
     return value
 
 
@@ -375,14 +379,14 @@ def parse_simple_flow_value(value: str) -> Any:
         return [] if not inner else [parse_simple_flow_value(item) if item[:1] in "[{" else parse_simple_scalar(item) for item in split_simple_flow_items(inner)]
     if value.startswith("{") and value.endswith("}"):
         inner = value[1:-1].strip()
-        result: dict[str, Any] = {}
+        result: dict[Any, Any] = {}
         if not inner:
             return result
         for item in split_simple_flow_items(inner):
             if ":" not in item:
                 raise ValidationFailure("Skill frontmatter contains a malformed flow mapping.")
             key, raw_item = item.split(":", 1)
-            key = str(parse_simple_scalar(key))
+            key = parse_simple_scalar(key)
             result[key] = parse_simple_flow_value(raw_item.strip()) if raw_item.strip()[:1] in "[{" else parse_simple_scalar(raw_item)
         return result
     return parse_simple_scalar(value)
@@ -395,10 +399,10 @@ def parse_simple_block_value(lines: list[str]) -> Any:
     if all(line.startswith("-") for line in meaningful):
         return [parse_simple_scalar(line[1:].strip()) for line in meaningful]
     if all(":" in line for line in meaningful):
-        result: dict[str, Any] = {}
+        result: dict[Any, Any] = {}
         for line in meaningful:
             key, value = line.split(":", 1)
-            result[key.strip()] = parse_simple_scalar(value)
+            result[parse_simple_scalar(key)] = parse_simple_scalar(value)
         return result
     raise ValidationFailure("Skill frontmatter contains an unsupported indented value.")
 
@@ -546,6 +550,22 @@ def validate_skill_frontmatter(
             skill_md,
             "Skill allowed-tools must be a non-empty space-separated string when present.",
             "Encode allowed-tools as a single string or remove the field.",
+        )
+
+    metadata = frontmatter.get("metadata")
+    if metadata is not None and (
+        not isinstance(metadata, dict)
+        or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in metadata.items()
+        )
+    ):
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            skill_md,
+            "Skill metadata must be an optional map with string keys and values when present.",
+            "Use a mapping whose keys and values are strings or remove the metadata field.",
         )
 
 

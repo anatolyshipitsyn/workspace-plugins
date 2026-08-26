@@ -441,7 +441,7 @@ class ValidatePluginTest(unittest.TestCase):
                 "description: Review files\n"
                 "compatibility: Requires python3 and git on PATH\n"
                 "allowed-tools: Read Bash(git:*)\n"
-                "metadata: {author: team, enabled: true}\n"
+                "metadata: {author: team, enabled: enabled}\n"
                 "---\n\nInstructions.\n",
                 encoding="utf-8",
             )
@@ -482,6 +482,26 @@ class ValidatePluginTest(unittest.TestCase):
                         "allowed-tools: [Read, Write]",
                     ],
                     "allowed-tools",
+                    True,
+                ),
+                (
+                    "metadata-values-must-be-strings",
+                    [
+                        "name: review-skill",
+                        "description: Review files",
+                        "metadata: {author: team, enabled: true}",
+                    ],
+                    "metadata",
+                    False,
+                ),
+                (
+                    "metadata-keys-must-be-strings",
+                    [
+                        "name: review-skill",
+                        "description: Review files",
+                        "metadata: {1: enabled}",
+                    ],
+                    "metadata",
                     True,
                 ),
                 (

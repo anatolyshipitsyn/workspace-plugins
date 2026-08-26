@@ -17,10 +17,12 @@ Implemented Task B only within the allowed write set:
   in this round:
   `name` must be 1-64 characters of lowercase letters, digits, and single
   internal hyphens; `description` must be 1-1024 characters; and
-  `allowed-tools` must be a non-empty string when present.
+  `allowed-tools` must be a non-empty string when present; `metadata` must be
+  an optional map whose keys and values are strings.
 - Kept the `python3 -S` fallback parser path working for valid frontmatter by
-  covering `compatibility`, string `allowed-tools`, and flow-style `metadata`
-  without relying on PyYAML.
+  covering `compatibility`, string `allowed-tools`, and string-only flow-style
+  `metadata` without relying on PyYAML. The fallback preserves numeric scalar
+  types so invalid metadata keys and values are rejected consistently.
 - Tightened scaffolding name validation so normalized plugin names must satisfy
   the bundled plugin schema length and pattern constraints, and normalized
   skill names must satisfy the Agent Skills name rules before any files are
