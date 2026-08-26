@@ -52,9 +52,10 @@ def run_scaffold(
     )
 
 
-def run_validate(plugin_path: Path) -> subprocess.CompletedProcess[str]:
+def run_validate(plugin_path: Path, *, isolated: bool = False) -> subprocess.CompletedProcess[str]:
+    python = ["python3", "-S"] if isolated else ["python3"]
     return subprocess.run(
-        ["python3", str(VALIDATE_SCRIPT), str(plugin_path)],
+        [*python, str(VALIDATE_SCRIPT), str(plugin_path)],
         capture_output=True,
         text=True,
         cwd=ROOT,
@@ -215,6 +216,85 @@ class ValidatePluginTest(unittest.TestCase):
             self.assertIn("mcp.json", result.stdout)
             self.assertIn("reserved", result.stdout.lower())
             self.assertIn("cwd", result.stdout.lower())
+
+    def test_rejects_mcp_command_and_argument_path_escapes_but_keeps_flags_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(
+                temp_dir,
+                mcp_servers=[
+                    {
+                        "name": "demo",
+                        "config": {
+                            "type": "stdio",
+                            "command": "python3",
+                            "args": ["--verbose", "server.py"],
+                            "cwd": "${PLUGIN_ROOT}",
+                        },
+                    }
+                ],
+            )
+            write_json(
+                plugin_root / "mcp.json",
+                {
+                    "$schema": MCP_SCHEMA_ID,
+                    "mcpServers": {
+                        "demo": {
+                            "type": "stdio",
+                            "command": "../outside/server",
+                            "args": ["--verbose", "../outside/script.py"],
+                            "cwd": "${PLUGIN_ROOT}",
+                        }
+                    },
+                },
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertGreaterEqual(result.stdout.lower().count("filesystem path"), 2)
+            self.assertNotIn("args[0]", result.stdout)
+
+    def test_rejects_quoted_json_secret_values_without_echoing_them(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            secret = "super-secret-value"
+            write_json(
+                plugin_root / "mcp.json",
+                {
+                    "$schema": MCP_SCHEMA_ID,
+                    "mcpServers": {
+                        "demo": {
+                            "type": "streamable-http",
+                            "url": "https://example.com/mcp",
+                            "headers": {"OPENAI_API_KEY": secret},
+                        }
+                    },
+                },
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("secret", result.stdout.lower())
+            self.assertNotIn(secret, result.stdout)
+
+    def test_accepts_flow_frontmatter_without_yaml_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            skill_md = plugin_root / "skills" / "review-skill" / "SKILL.md"
+            skill_md.write_text(
+                "---\n"
+                "name: review-skill\n"
+                "description: Review files\n"
+                "allowed-tools: [Read, Write]\n"
+                "metadata: {author: team, enabled: true}\n"
+                "---\n\nInstructions.\n",
+                encoding="utf-8",
+            )
+
+            result = run_validate(plugin_root, isolated=True)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_rejects_symlink_escape(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -26,6 +26,9 @@ SECRET_PATTERNS = [
     ),
     re.compile(r"(?i)\bauthorization\b\s*[:=]\s*['\"]?(?:bearer|basic)\s+[^\s'\"]+"),
 ]
+SECRET_KEY_PATTERN = re.compile(
+    r"(?i)(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|authorization)"
+)
 
 
 class ValidationFailure(Exception):
@@ -284,8 +287,12 @@ def extract_frontmatter_document(skill_path: Path) -> tuple[dict[str, Any], str]
 
 def parse_simple_frontmatter(frontmatter_text: str) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for line in frontmatter_text.splitlines():
+    lines = frontmatter_text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         stripped = line.strip()
+        index += 1
         if not stripped:
             continue
         if ":" not in stripped:
@@ -302,11 +309,86 @@ def parse_simple_frontmatter(frontmatter_text: str) -> dict[str, Any]:
         elif value in {"true", "false"}:
             parsed_value = value == "true"
         elif value.startswith("[") or value.startswith("{"):
-            raise ValidationFailure("Skill frontmatter needs a YAML parser for complex values.")
+            parsed_value = parse_simple_flow_value(value)
+        elif not value:
+            nested: list[str] = []
+            while index < len(lines) and (not lines[index].strip() or lines[index].startswith((" ", "\t"))):
+                nested.append(lines[index])
+                index += 1
+            parsed_value = parse_simple_block_value(nested)
         else:
             parsed_value = value
         result[key] = parsed_value
     return result
+
+
+def split_simple_flow_items(value: str) -> list[str]:
+    items: list[str] = []
+    start = 0
+    depth = 0
+    quote: str | None = None
+    for index, character in enumerate(value):
+        if quote:
+            if character == quote and (index == 0 or value[index - 1] != "\\"):
+                quote = None
+        elif character in {"'", '"'}:
+            quote = character
+        elif character in "[{":
+            depth += 1
+        elif character in "]}":
+            depth -= 1
+        elif character == "," and depth == 0:
+            items.append(value[start:index].strip())
+            start = index + 1
+    items.append(value[start:].strip())
+    return [item for item in items if item]
+
+
+def parse_simple_scalar(value: str) -> Any:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    if value in {"null", "~"}:
+        return None
+    return value
+
+
+def parse_simple_flow_value(value: str) -> Any:
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        return [] if not inner else [parse_simple_flow_value(item) if item[:1] in "[{" else parse_simple_scalar(item) for item in split_simple_flow_items(inner)]
+    if value.startswith("{") and value.endswith("}"):
+        inner = value[1:-1].strip()
+        result: dict[str, Any] = {}
+        if not inner:
+            return result
+        for item in split_simple_flow_items(inner):
+            if ":" not in item:
+                raise ValidationFailure("Skill frontmatter contains a malformed flow mapping.")
+            key, raw_item = item.split(":", 1)
+            key = str(parse_simple_scalar(key))
+            result[key] = parse_simple_flow_value(raw_item.strip()) if raw_item.strip()[:1] in "[{" else parse_simple_scalar(raw_item)
+        return result
+    return parse_simple_scalar(value)
+
+
+def parse_simple_block_value(lines: list[str]) -> Any:
+    meaningful = [line.strip() for line in lines if line.strip()]
+    if not meaningful:
+        return None
+    if all(line.startswith("-") for line in meaningful):
+        return [parse_simple_scalar(line[1:].strip()) for line in meaningful]
+    if all(":" in line for line in meaningful):
+        result: dict[str, Any] = {}
+        for line in meaningful:
+            key, value = line.split(":", 1)
+            result[key.strip()] = parse_simple_scalar(value)
+        return result
+    raise ValidationFailure("Skill frontmatter contains an unsupported indented value.")
 
 
 def validate_skill_frontmatter(
@@ -562,6 +644,49 @@ def contains_dotdot_suffix(raw_path: str, prefix: str) -> bool:
     return ".." in Path(suffix).parts
 
 
+def looks_like_mcp_path(value: str, *, command: bool = False) -> bool:
+    if value.startswith(("/", "./", "../", "${")) or "/" in value:
+        return True
+    if command:
+        return value.endswith((".py", ".js", ".ts", ".sh", ".rb", ".pl", ".exe"))
+    return value.endswith((".py", ".js", ".ts", ".sh", ".rb", ".pl", ".exe", ".json", ".yaml", ".yml"))
+
+
+def validate_mcp_path_value(
+    diagnostics: list[Diagnostic],
+    package_root: Path,
+    target_path: Path,
+    server_name: str,
+    field: str,
+    value: str,
+    *,
+    placeholder_root: str,
+    placeholder_data: str,
+) -> None:
+    if not looks_like_mcp_path(value, command=field == "command"):
+        return
+
+    if value.startswith((placeholder_data, CLAUDE_PLUGIN_DATA)):
+        data_placeholder = placeholder_data if value.startswith(placeholder_data) else CLAUDE_PLUGIN_DATA
+        if contains_dotdot_suffix(value, data_placeholder):
+            escaped = True
+        else:
+            return
+    else:
+        portable_value = value.replace(placeholder_root, PORTABLE_PLUGIN_ROOT)
+        resolved = resolve_plugin_relative_path(package_root, portable_value)
+        escaped = resolved is None or not ensure_within_root(package_root.resolve(), resolved)
+
+    if escaped:
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            target_path,
+            f"mcp server {server_name!r} {field} contains a filesystem path outside the plugin root.",
+            f"Keep {field} executable and script paths inside the plugin package.",
+        )
+
+
 def validate_stdio_server(
     diagnostics: list[Diagnostic],
     package_root: Path,
@@ -582,6 +707,21 @@ def validate_stdio_server(
             f"mcp server {server_name!r} uses a multi-token stdio command.",
             "Put the executable in command and pass extra tokens through args.",
         )
+    if isinstance(command, str):
+        validate_mcp_path_value(
+            diagnostics, package_root, target_path, server_name, "command", command,
+            placeholder_root=placeholder_root, placeholder_data=placeholder_data,
+        )
+
+    args = server_config.get("args")
+    if isinstance(args, list):
+        for index, argument in enumerate(args):
+            if not isinstance(argument, str) or not looks_like_mcp_path(argument):
+                continue
+            validate_mcp_path_value(
+                diagnostics, package_root, target_path, server_name, f"args[{index}]", argument,
+                placeholder_root=placeholder_root, placeholder_data=placeholder_data,
+            )
 
     env = server_config.get("env")
     if isinstance(env, dict):
@@ -801,6 +941,20 @@ def iter_text_files(package_root: Path) -> Iterable[Path]:
             yield current_path / file_name
 
 
+def contains_structured_secret(value: Any, key_name: str | None = None) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(key, str) and SECRET_KEY_PATTERN.search(key) and isinstance(child, str):
+                normalized = child.strip().lower()
+                if len(child.strip()) >= 6 and not normalized.startswith(("${", "<", "your-", "replace-", "example")):
+                    return True
+            if contains_structured_secret(child, key if isinstance(key, str) else None):
+                return True
+    elif isinstance(value, list):
+        return any(contains_structured_secret(child, key_name) for child in value)
+    return False
+
+
 def validate_secret_material(diagnostics: list[Diagnostic], package_root: Path) -> None:
     for file_path in iter_text_files(package_root):
         if file_path.is_symlink():
@@ -821,7 +975,14 @@ def validate_secret_material(diagnostics: list[Diagnostic], package_root: Path) 
         except OSError:
             continue
 
-        if any(pattern.search(content) for pattern in SECRET_PATTERNS):
+        has_secret = any(pattern.search(content) for pattern in SECRET_PATTERNS)
+        if file_path.suffix.lower() == ".json":
+            try:
+                has_secret = has_secret or contains_structured_secret(json.loads(content))
+            except json.JSONDecodeError:
+                pass
+
+        if has_secret:
             add_diagnostic(
                 diagnostics,
                 package_root,
