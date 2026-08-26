@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import sys
 import types
@@ -83,6 +84,26 @@ def load_tests(
         suite.addTests(loader.loadTestsFromModule(module))
 
     class DiscoveryIsolationTest(unittest.TestCase):
+        def test_import_tests_preserves_callers_bytecode_setting(self) -> None:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    "-c",
+                    (
+                        "import sys; "
+                        "sys.dont_write_bytecode = False; "
+                        "import tests; "
+                        "assert sys.dont_write_bytecode is False"
+                    ),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
         def test_bridged_tests_leave_repository_registry_unchanged(self) -> None:
             self.assertEqual(REGISTRY_PATH.read_bytes(), ORIGINAL_REGISTRY)
 

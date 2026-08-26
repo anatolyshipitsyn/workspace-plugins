@@ -196,6 +196,52 @@ cache. The bridge continues to restore the prior bytecode setting in
 `finally`; the registry assertion passed and no repository `__pycache__` or
 `.pyc` artifacts remained after the runs.
 
+Fix-round 4 verification:
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 39 tests in 5.067s
+OK
+```
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 39 tests in 5.103s
+OK
+```
+
+```text
+python3 -S -m unittest tests.test_plugin_suite -v
+```
+
+```text
+Ran 37 tests in 4.964s
+OK
+```
+
+`tests/__init__.py` now captures the caller's bytecode flag, suppresses
+bytecode during package initialization, restores that flag before package
+import returns, and cleans any test-package caches at process exit. The bridge
+still restores its temporary import setting in `finally`, and the subprocess
+regression confirms ordinary `import tests` preserves the caller's setting.
+No repository `__pycache__`/`.pyc` artifacts or registry mutation remained.
+
+Fix-round 4 final artifact check:
+
+```text
+find . -type d -name __pycache__ -print
+find . -type f -name '*.pyc' -print
+```
+
+No output. The cleanup tracks pre-existing bytecode and removes only caches
+created during the current test process.
+
 ## Self-review
 
 - Confirmed the bridge is limited to repository-level discovery and does not
@@ -213,3 +259,5 @@ cache. The bridge continues to restore the prior bytecode setting in
 - Confirmed the package-level guard runs before discovered test imports and
   default discovery leaves no repository bytecode artifacts or registry
   mutation.
+- Confirmed ordinary `import tests` restores the caller's prior bytecode flag
+  and default discovery remains artifact-free across repeated runs.
