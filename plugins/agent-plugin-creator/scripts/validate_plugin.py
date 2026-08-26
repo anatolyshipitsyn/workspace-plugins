@@ -379,16 +379,29 @@ def parse_simple_scalar(value: str) -> Any:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
-    if value == "true":
+    lowered = value.lower()
+    if lowered in {"true", "yes", "on"}:
         return True
-    if value == "false":
+    if lowered in {"false", "no", "off"}:
         return False
-    if value in {"null", "~"}:
+    if lowered in {"null", "~"}:
         return None
-    if re.fullmatch(r"[-+]?\d+", value):
-        return int(value)
-    if re.fullmatch(r"[-+]?(?:\d+\.\d*|\.\d+)", value):
-        return float(value)
+    if re.fullmatch(r"[-+]?0b[0-1_]+", value, re.IGNORECASE):
+        return int(value.replace("_", ""), 2)
+    if re.fullmatch(r"[-+]?0x[0-9a-f_]+", value, re.IGNORECASE):
+        return int(value.replace("_", ""), 16)
+    if re.fullmatch(r"[-+]?0[0-7_]+", value):
+        sign = -1 if value.startswith("-") else 1
+        digits = value.lstrip("+-").replace("_", "")
+        return sign * int(digits, 8)
+    if re.fullmatch(r"[-+]?(?:0|[1-9][0-9_]+|[1-9][0-9]*)", value):
+        return int(value.replace("_", ""))
+    if lowered in {".inf", "+.inf", "-.inf", ".nan"}:
+        return float(lowered.replace(".inf", "inf").replace(".nan", "nan"))
+    if re.fullmatch(r"[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*(?:[eE][-+]?[0-9]+)?", value) or re.fullmatch(
+        r"[-+]?[0-9][0-9_]*\.[0-9_]*(?:[eE][-+]?[0-9]+)", value
+    ):
+        return float(value.replace("_", ""))
     return value
 
 

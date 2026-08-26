@@ -709,10 +709,28 @@ class ValidatePluginTest(unittest.TestCase):
                     "description",
                 ),
                 (
+                    "case-insensitive-boolean-description",
+                    [
+                        "name: review-skill",
+                        "description: TRUE",
+                    ],
+                    1,
+                    "description",
+                ),
+                (
                     "numeric-description",
                     [
                         "name: review-skill",
                         "description: 101",
+                    ],
+                    1,
+                    "description",
+                ),
+                (
+                    "hexadecimal-description",
+                    [
+                        "name: review-skill",
+                        "description: 0x10",
                     ],
                     1,
                     "description",
