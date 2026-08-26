@@ -84,14 +84,22 @@ def load_tests(
         suite.addTests(loader.loadTestsFromModule(module))
 
     class DiscoveryIsolationTest(unittest.TestCase):
-        def test_import_tests_preserves_callers_bytecode_setting(self) -> None:
+        def test_import_tests_preserves_flag_and_cleans_test_bytecode(self) -> None:
             result = subprocess.run(
                 [
                     sys.executable,
                     "-S",
                     "-c",
                     (
+                        "from pathlib import Path; "
                         "import sys; "
+                        "root = Path.cwd(); "
+                        "root_cache = root / 'tests' / '__pycache__'; "
+                        "plugin_cache = root / 'plugins' / 'agent-plugin-creator' / 'tests' / '__pycache__'; "
+                        "root_cache.mkdir(parents=True, exist_ok=True); "
+                        "plugin_cache.mkdir(parents=True, exist_ok=True); "
+                        "(root_cache / 'task-c-sentinel.pyc').write_bytes(b''); "
+                        "(plugin_cache / 'task-c-sentinel.pyc').write_bytes(b''); "
                         "sys.dont_write_bytecode = False; "
                         "import tests; "
                         "assert sys.dont_write_bytecode is False"
@@ -103,6 +111,17 @@ def load_tests(
                 check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((ROOT / "tests" / "__pycache__" / "task-c-sentinel.pyc").exists())
+            self.assertFalse(
+                (
+                    ROOT
+                    / "plugins"
+                    / "agent-plugin-creator"
+                    / "tests"
+                    / "__pycache__"
+                    / "task-c-sentinel.pyc"
+                ).exists()
+            )
 
         def test_bridged_tests_leave_repository_registry_unchanged(self) -> None:
             self.assertEqual(REGISTRY_PATH.read_bytes(), ORIGINAL_REGISTRY)

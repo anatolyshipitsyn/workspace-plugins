@@ -242,6 +242,45 @@ find . -type f -name '*.pyc' -print
 No output. The cleanup tracks pre-existing bytecode and removes only caches
 created during the current test process.
 
+Fix-round 5 verification:
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 39 tests in 5.087s
+OK
+```
+
+```text
+python3 -m unittest discover -v
+```
+
+```text
+Ran 39 tests in 5.171s
+OK
+```
+
+```text
+python3 -S -m unittest tests.test_plugin_suite -v
+```
+
+```text
+Ran 37 tests in 4.999s
+OK
+```
+
+The test-package exit cleanup no longer uses a pre-import bytecode snapshot.
+It unconditionally removes disposable `.pyc` files and empty `__pycache__`
+directories under both the repository test root and the bridged plugin-test
+root. The subprocess regression creates sentinels in both roots, verifies the
+caller bytecode flag remains unchanged, and confirms the sentinels are removed
+at process exit.
+
+Final artifact and registry checks produced no cache output, no registry diff,
+and a clean worktree after generated-cache cleanup.
+
 ## Self-review
 
 - Confirmed the bridge is limited to repository-level discovery and does not
@@ -261,3 +300,5 @@ created during the current test process.
   mutation.
 - Confirmed ordinary `import tests` restores the caller's prior bytecode flag
   and default discovery remains artifact-free across repeated runs.
+- Confirmed cleanup does not rely on a pre-import snapshot and covers both
+  repository test directories while preserving registry isolation.
