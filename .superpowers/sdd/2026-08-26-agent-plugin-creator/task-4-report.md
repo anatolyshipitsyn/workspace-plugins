@@ -1,5 +1,17 @@
 # Task 4 report
 
+## Fix round 1
+
+Addressed the two independent review findings without changing files outside
+the Task 4 write set.
+
+- Replaced repository-root script and registry paths in the skill and its
+  documentation with the installed-package `${PLUGIN_ROOT}` convention,
+  including Codex and Claude usage examples.
+- Changed package tests to validate the real creator package with the existing
+  validator and to assert that the shared skill is not duplicated under the
+  Claude adapter.
+
 ## Scope
 
 Implemented the Task 4 package files for `plugins/agent-plugin-creator`
@@ -35,8 +47,8 @@ without modifying scripts, schemas, the registry, or any other plugin package.
 - Added package documentation with Codex and Claude loading examples, offline
   usage, release policy, and no-secret guidance.
 - Added package tests that verify manifest policy, skill routing, Claude
-  adapter minimalism, documentation links, and validator execution against a
-  generated package fixture.
+  adapter minimalism, documentation links, real-package validator execution,
+  and absence of a duplicated skill tree.
 
 ## Verification
 
@@ -80,6 +92,18 @@ git diff --check
 exit 0 with no output
 ```
 
+Fix-round validation also passed for the real creator package:
+
+```text
+python3 plugins/agent-plugin-creator/scripts/validate_plugin.py plugins/agent-plugin-creator
+python3 -S plugins/agent-plugin-creator/scripts/validate_plugin.py plugins/agent-plugin-creator
+```
+
+Both commands exited 0 with no output. A portability scan found no
+`plugins/agent-plugin-creator/scripts` or `plugins/agent-plugin-creator/specs`
+paths in the four reviewed documents. Generated test `__pycache__` artifacts
+were removed and were not committed.
+
 ## Self-review
 
 - The root manifest uses only portable fields and the exact local registry
@@ -90,15 +114,13 @@ exit 0 with no output
   `.claude-plugin/`.
 - The package docs include offline usage, local loading examples, no-secret
   policy, and attribution notes.
-- The package tests invoke the existing validator in a meaningful way by
-  validating a generated package fixture.
+- The package tests invoke the existing validator against the real creator
+  package and assert that the shared skill tree is not duplicated for Claude.
+- Installed-package instructions use `${PLUGIN_ROOT}` and contain no
+  repository-root paths for scripts or bundled registry data.
 
 ## Known limitation
 
-The current `validate_plugin.py` implementation cannot be used to validate the
-creator package itself without false positives, because its secret-detection
-rules also match secret-related regex strings committed inside
-`validate_plugin.py`, `tests/test_validate_plugin.py`, and the existing
-`tests/__pycache__/test_validate_plugin.cpython-314.pyc`. Those files are
-outside the Task 4 write set, so this task preserves that behavior and tests
-the validator on a generated package instead.
+The validator is a static package check; it does not prove runtime behavior for
+an MCP server. This package has no MCP server, so no MCP runtime smoke test is
+applicable.

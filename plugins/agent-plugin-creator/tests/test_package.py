@@ -3,13 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
-import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[3]
 PLUGIN_ROOT = ROOT / "plugins" / "agent-plugin-creator"
-SCAFFOLD_SCRIPT = PLUGIN_ROOT / "scripts" / "scaffold_plugin.py"
 VALIDATE_SCRIPT = PLUGIN_ROOT / "scripts" / "validate_plugin.py"
 REGISTRY_PATH = PLUGIN_ROOT / "specs" / "registry.json"
 README_PATH = PLUGIN_ROOT / "README.md"
@@ -41,33 +39,9 @@ class PackageMetadataTest(unittest.TestCase):
         self.assertEqual(manifest["license"], "Apache-2.0")
         self.assertNotIn("extensions", manifest)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            scaffold = subprocess.run(
-                [
-                    "python3",
-                    str(SCAFFOLD_SCRIPT),
-                    "--destination",
-                    temp_dir,
-                    "--name",
-                    "Validation Demo",
-                    "--description",
-                    "Validation demo plugin",
-                    "--clients",
-                    "codex,claude",
-                    "--with-skill",
-                    "demo-skill",
-                ],
-                capture_output=True,
-                text=True,
-                cwd=ROOT,
-                check=False,
-            )
-            self.assertEqual(scaffold.returncode, 0, scaffold.stdout + scaffold.stderr)
-
-            generated_root = Path(temp_dir) / "validation-demo"
-            result = run_validate(generated_root)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(result.stderr, "")
+        result = run_validate(PLUGIN_ROOT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "")
 
     def test_skill_routes_to_scripts_and_references(self) -> None:
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
@@ -102,6 +76,11 @@ class PackageMetadataTest(unittest.TestCase):
             },
         )
         self.assertFalse((PLUGIN_ROOT / ".claude-plugin" / "skills").exists())
+        self.assertFalse((PLUGIN_ROOT / ".claude-plugin" / "commands").exists())
+        self.assertEqual(
+            sorted(path.relative_to(PLUGIN_ROOT).as_posix() for path in PLUGIN_ROOT.glob("**/SKILL.md")),
+            ["skills/create-agent-plugin/SKILL.md"],
+        )
 
     def test_documentation_links_and_policy_are_present(self) -> None:
         readme = README_PATH.read_text(encoding="utf-8")

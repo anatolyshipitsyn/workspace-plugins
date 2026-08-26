@@ -14,6 +14,6 @@ Attribution rules for this plugin:
 Repository-specific expectations:
 
 - Keep attribution notices inside the plugin package.
-- Do not remove `plugins/agent-plugin-creator/specs/1.0.0/NOTICE.md`.
+- Do not remove `${PLUGIN_ROOT}/specs/1.0.0/NOTICE.md`.
 - Document the attribution policy in `README.md`.
 - Avoid adding third-party text or assets without clear license provenance.

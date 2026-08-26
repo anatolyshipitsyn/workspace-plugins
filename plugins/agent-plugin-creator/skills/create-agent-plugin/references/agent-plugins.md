@@ -7,8 +7,9 @@ package shape is:
 - root `skills/`
 - optional root `mcp.json`
 
-The local bundled registry at `plugins/agent-plugin-creator/specs/registry.json`
-selects the only supported published release:
+The local bundled registry at `${PLUGIN_ROOT}/specs/registry.json`, where
+`PLUGIN_ROOT` is the installed plugin directory, selects the only supported
+published release:
 
 - latest published release: `1.0.0`
 - latest published plugin schema id:

@@ -16,7 +16,8 @@ local Python scripts for deterministic offline scaffolding and validation.
 ## Release policy
 
 The package follows the local registry at
-`plugins/agent-plugin-creator/specs/registry.json`.
+`${PLUGIN_ROOT}/specs/registry.json`, where `PLUGIN_ROOT` is the installed
+package directory.
 
 - published release used for scaffolding: `1.0.0`
 - portable schema id:
@@ -32,16 +33,17 @@ The scaffolder uses the registry's latest published release and does not expose
 
 The package ships with a local registry and bundled schemas so generation and
 validation do not need network access during normal use. Upstream links are
-kept for traceability, but the scripts read the local files under `specs/`.
+kept for traceability, but the scripts read the local files under
+`${PLUGIN_ROOT}/specs/`.
 
 ## Installation examples
 
 ### Codex
 
-Example local package layout:
+Set `PLUGIN_ROOT` to the installed package directory. For example:
 
 ```text
-~/.codex/plugins/agent-plugin-creator/
+${PLUGIN_ROOT}/
 ├── plugin.json
 ├── skills/
 └── scripts/
@@ -52,10 +54,10 @@ Load the package through the Codex client's local plugin workflow so the root
 
 ### Claude Code
 
-Example local package layout:
+Set `PLUGIN_ROOT` to the installed package directory. For example:
 
 ```text
-~/.claude/plugins/agent-plugin-creator/
+${PLUGIN_ROOT}/
 ├── plugin.json
 ├── .claude-plugin/plugin.json
 ├── skills/
@@ -79,7 +81,7 @@ adapter entrypoint.
 Example scaffold invocation:
 
 ```bash
-python3 plugins/agent-plugin-creator/scripts/scaffold_plugin.py \
+python3 "${PLUGIN_ROOT}/scripts/scaffold_plugin.py" \
   --destination /tmp/plugins \
   --name demo-plugin \
   --description "Demo portable plugin" \
@@ -90,7 +92,7 @@ python3 plugins/agent-plugin-creator/scripts/scaffold_plugin.py \
 Example validation invocation:
 
 ```bash
-python3 plugins/agent-plugin-creator/scripts/validate_plugin.py \
+python3 "${PLUGIN_ROOT}/scripts/validate_plugin.py" \
   /tmp/plugins/demo-plugin
 ```
 
@@ -117,7 +119,7 @@ run a separate runtime smoke test.
 
 ## Attribution
 
-- Bundled Agent Plugins schemas under `specs/1.0.0/` retain Apache-2.0
-  attribution. See `specs/1.0.0/NOTICE.md`.
+- Bundled Agent Plugins schemas under `${PLUGIN_ROOT}/specs/1.0.0/` retain Apache-2.0
+  attribution. See `${PLUGIN_ROOT}/specs/1.0.0/NOTICE.md`.
 - Any copied specification prose or copied examples must retain CC-BY-4.0
   attribution.

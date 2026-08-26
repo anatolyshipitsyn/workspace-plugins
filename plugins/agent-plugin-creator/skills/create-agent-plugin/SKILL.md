@@ -11,10 +11,12 @@ Design the package before you write anything.
 - Explain the boundary: portable assets live at the plugin root, while Claude Code differences stay in `.claude-plugin/` or `.mcp.json`.
 - Show the proposed tree, note which files are shared, and pause for explicit confirmation immediately before mutation.
 
-Use deterministic local scripts from this plugin root:
+Use deterministic local scripts from the installed plugin root. Set
+`PLUGIN_ROOT` to the directory containing this skill's `skills/` and `scripts/`
+directories, then run:
 
-- `plugins/agent-plugin-creator/scripts/scaffold_plugin.py` for package creation.
-- `plugins/agent-plugin-creator/scripts/validate_plugin.py` for structural validation after generation or edits.
+- `python3 "${PLUGIN_ROOT}/scripts/scaffold_plugin.py"` for package creation.
+- `python3 "${PLUGIN_ROOT}/scripts/validate_plugin.py" <plugin-directory>` for structural validation after generation or edits.
 
 Follow the local registry policy:
 
