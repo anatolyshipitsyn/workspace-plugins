@@ -150,7 +150,13 @@ def parse_mcp_servers(raw_servers: list[str]) -> dict[str, dict[str, Any]]:
 
 
 def ensure_destination(destination: Path) -> Path:
-    resolved_destination = destination.resolve()
+    requested_destination = destination.expanduser()
+    if requested_destination.exists() and requested_destination.is_symlink():
+        raise ScaffoldError(
+            "Destination resolves outside the requested destination path."
+        )
+    resolved_destination = requested_destination.resolve()
+
     if resolved_destination.exists():
         if not resolved_destination.is_dir():
             raise ScaffoldError("Destination must be an existing directory or a new directory path.")

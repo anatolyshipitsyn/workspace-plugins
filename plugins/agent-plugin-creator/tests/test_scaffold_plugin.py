@@ -243,14 +243,21 @@ class ScaffoldPluginTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("type", result.stderr.lower())
 
-    def test_rejects_destination_escape_before_write(self) -> None:
+    def test_rejects_symlink_destination_escape_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            destination = Path(temp_dir)
-            result = run_scaffold(destination, "..", clients=["codex"])
+            temp_root = Path(temp_dir)
+            requested_root = temp_root / "requested"
+            outside_root = temp_root / "outside"
+            requested_root.mkdir()
+            outside_root.mkdir()
+            (requested_root / "escape-link").symlink_to(outside_root, target_is_directory=True)
+
+            result = run_scaffold(requested_root / "escape-link", "demo-plugin", clients=["codex"])
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("empty after normalization", result.stderr.lower())
-            self.assertFalse((destination / "plugin.json").exists())
+            self.assertIn("destination", result.stderr.lower())
+            self.assertFalse((outside_root / "demo-plugin").exists())
+            self.assertFalse((requested_root / "demo-plugin").exists())
 
     def test_writes_deterministic_json_with_final_newline(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
