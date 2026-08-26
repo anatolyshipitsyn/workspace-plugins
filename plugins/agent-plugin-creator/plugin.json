@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agent-plugin-creator",
+  "version": "0.1.0",
+  "description": "Create or update a portable Agent Plugin package for Codex and Claude Code using bundled release metadata and local validation scripts.",
+  "license": "Apache-2.0",
+  "keywords": [
+    "agent-plugin",
+    "plugin-scaffolding",
+    "codex",
+    "claude-code"
+  ]
+}

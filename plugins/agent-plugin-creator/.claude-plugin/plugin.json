@@ -1,0 +1,5 @@
+{
+  "name": "agent-plugin-creator",
+  "version": "0.1.0",
+  "description": "Claude Code adapter for the shared agent-plugin-creator package."
+}
