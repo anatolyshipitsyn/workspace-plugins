@@ -151,10 +151,23 @@ def parse_mcp_servers(raw_servers: list[str]) -> dict[str, dict[str, Any]]:
 
 def ensure_destination(destination: Path) -> Path:
     requested_destination = destination.expanduser()
-    if requested_destination.exists() and requested_destination.is_symlink():
-        raise ScaffoldError(
-            "Destination resolves outside the requested destination path."
-        )
+    current = requested_destination
+    while not current.exists() and current != current.parent:
+        current = current.parent
+
+    probe = current
+    while True:
+        if probe.is_symlink():
+            raise ScaffoldError(
+                "Destination resolves outside the requested destination path."
+            )
+        if probe == requested_destination:
+            break
+        next_probe = probe / requested_destination.relative_to(probe).parts[0]
+        if next_probe == probe:
+            break
+        probe = next_probe
+
     resolved_destination = requested_destination.resolve()
 
     if resolved_destination.exists():
