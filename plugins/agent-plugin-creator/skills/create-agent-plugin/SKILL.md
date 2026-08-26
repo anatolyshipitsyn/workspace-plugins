@@ -7,7 +7,7 @@ license: Apache-2.0
 Design the package before you write anything.
 
 - First decide whether the request targets a new plugin or an existing plugin update.
-- Collect the plugin name, purpose, concise description, desired license, target clients, shared skills, and any MCP servers that must be packaged.
+- Collect the plugin name, purpose, concise description, optional portable license, optional author metadata, target clients, shared skills, and any MCP servers that must be packaged.
 - Explain the boundary: portable assets live at the plugin root, while Claude Code differences stay in `.claude-plugin/` or `.mcp.json`.
 - Show the proposed tree, note which files are shared, and pause for explicit confirmation immediately before mutation.
 
@@ -17,6 +17,12 @@ directories, then run:
 
 - `python3 "${PLUGIN_ROOT}/scripts/scaffold_plugin.py"` for package creation.
 - `python3 "${PLUGIN_ROOT}/scripts/validate_plugin.py" <plugin-directory>` for structural validation after generation or edits.
+
+Scaffold options to use when the requester has supplied metadata:
+
+- `--license LICENSE` writes the portable manifest `license` field.
+- `--author-name NAME`, `--author-email EMAIL`, and `--author-url URL` build the portable manifest `author` object from the provided fields only.
+- If license or author metadata is not provided, omit those manifest fields intentionally rather than inventing defaults.
 
 Follow the local registry policy:
 

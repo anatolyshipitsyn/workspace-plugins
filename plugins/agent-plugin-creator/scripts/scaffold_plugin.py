@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import sys
 from typing import Any
+from urllib.parse import urlparse
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -30,6 +31,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clients", required=True)
     parser.add_argument("--with-skill", action="append", default=[])
     parser.add_argument("--with-mcp-server", action="append", default=[])
+    parser.add_argument("--license")
+    parser.add_argument("--author-name")
+    parser.add_argument("--author-email")
+    parser.add_argument("--author-url")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -166,6 +171,65 @@ def parse_mcp_servers(raw_servers: list[str]) -> dict[str, dict[str, Any]]:
     return servers
 
 
+def parse_optional_text(field_name: str, raw_value: str | None) -> str | None:
+    if raw_value is None:
+        return None
+
+    value = raw_value.strip()
+    if not value:
+        raise ScaffoldError(f"{field_name} cannot be empty when provided.")
+    return value
+
+
+def validate_author_email(email: str) -> str:
+    if "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise ScaffoldError("Author email must be a valid email address.")
+    local_part, _, domain = email.rpartition("@")
+    if not local_part or "." not in domain or domain.startswith(".") or domain.endswith("."):
+        raise ScaffoldError("Author email must be a valid email address.")
+    return email
+
+
+def validate_author_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ScaffoldError("Author URL must be an absolute http or https URL.")
+    return url
+
+
+def build_optional_manifest_metadata(
+    *,
+    license_name: str | None,
+    author_name: str | None,
+    author_email: str | None,
+    author_url: str | None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+
+    normalized_license = parse_optional_text("License", license_name)
+    if normalized_license is not None:
+        metadata["license"] = normalized_license
+
+    author: dict[str, str] = {}
+
+    normalized_author_name = parse_optional_text("Author name", author_name)
+    if normalized_author_name is not None:
+        author["name"] = normalized_author_name
+
+    normalized_author_email = parse_optional_text("Author email", author_email)
+    if normalized_author_email is not None:
+        author["email"] = validate_author_email(normalized_author_email)
+
+    normalized_author_url = parse_optional_text("Author URL", author_url)
+    if normalized_author_url is not None:
+        author["url"] = validate_author_url(normalized_author_url)
+
+    if author:
+        metadata["author"] = author
+
+    return metadata
+
+
 def ensure_destination(destination: Path) -> Path:
     requested_destination = destination.expanduser()
     current = requested_destination
@@ -280,6 +344,10 @@ def scaffold_plugin(
     clients: list[str],
     skills: list[str],
     mcp_servers: dict[str, dict[str, Any]],
+    license_name: str | None = None,
+    author_name: str | None = None,
+    author_email: str | None = None,
+    author_url: str | None = None,
     *,
     force: bool,
 ) -> Path:
@@ -295,6 +363,13 @@ def scaffold_plugin(
             f"Normalized plugin name {normalized_name!r} does not satisfy the latest release constraints."
         )
 
+    manifest_metadata = build_optional_manifest_metadata(
+        license_name=license_name,
+        author_name=author_name,
+        author_email=author_email,
+        author_url=author_url,
+    )
+
     destination_root = ensure_destination(destination)
     plugin_root = validate_output_path(destination_root, normalized_name)
     if plugin_root.exists() and not force:
@@ -309,6 +384,7 @@ def scaffold_plugin(
             "version": "0.1.0",
             "description": description,
             "keywords": ["agent-plugin"],
+            **manifest_metadata,
         },
         force=force,
         plugin_root=plugin_root,
@@ -376,6 +452,10 @@ def main() -> int:
             clients,
             skills,
             mcp_servers,
+            license_name=args.license,
+            author_name=args.author_name,
+            author_email=args.author_email,
+            author_url=args.author_url,
             force=args.force,
         )
     except (ScaffoldError, FileExistsError) as exc:

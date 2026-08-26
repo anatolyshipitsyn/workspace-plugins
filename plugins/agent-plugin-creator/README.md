@@ -78,6 +78,16 @@ adapter entrypoint.
    written.
 4. Run structural validation after generation or edits.
 
+Optional portable metadata flags:
+
+- `--license LICENSE` writes `plugin.json["license"]` only when supplied.
+- `--author-name NAME` sets `plugin.json["author"]["name"]`.
+- `--author-email EMAIL` sets `plugin.json["author"]["email"]`.
+- `--author-url URL` sets `plugin.json["author"]["url"]`.
+
+When license or author details are not supplied, the scaffolder omits those
+manifest fields intentionally. It does not guess defaults.
+
 Example scaffold invocation:
 
 ```bash
@@ -86,6 +96,10 @@ python3 "${PLUGIN_ROOT}/scripts/scaffold_plugin.py" \
   --name demo-plugin \
   --description "Demo portable plugin" \
   --clients codex,claude \
+  --license MIT \
+  --author-name "Ada Lovelace" \
+  --author-email "ada@example.com" \
+  --author-url "https://example.com/ada" \
   --with-skill review-skill
 ```
 

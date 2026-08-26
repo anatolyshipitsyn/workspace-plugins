@@ -23,6 +23,10 @@ def run_scaffold(
     clients: list[str],
     skills: list[str] | None = None,
     mcp_servers: list[dict[str, object]] | None = None,
+    license_name: str | None = None,
+    author_name: str | None = None,
+    author_email: str | None = None,
+    author_url: str | None = None,
     force: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     command = [
@@ -43,6 +47,18 @@ def run_scaffold(
 
     for server in mcp_servers or []:
         command.extend(["--with-mcp-server", json.dumps(server)])
+
+    if license_name is not None:
+        command.extend(["--license", license_name])
+
+    if author_name is not None:
+        command.extend(["--author-name", author_name])
+
+    if author_email is not None:
+        command.extend(["--author-email", author_email])
+
+    if author_url is not None:
+        command.extend(["--author-url", author_url])
 
     if force:
         command.append("--force")
@@ -123,6 +139,70 @@ class ScaffoldPluginTest(unittest.TestCase):
             self.assertFalse(
                 (plugin_root / ".claude-plugin" / "skills" / "review-skill" / "SKILL.md").exists()
             )
+
+    def test_preserves_optional_license_and_author_metadata_in_portable_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir)
+            result = run_scaffold(
+                destination,
+                "demo-plugin",
+                clients=["codex", "claude"],
+                license_name="MIT",
+                author_name="Ada Lovelace",
+                author_email="ada@example.com",
+                author_url="https://example.com/ada",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            plugin_root = destination / "demo-plugin"
+            manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
+            claude_manifest = json.loads(
+                (plugin_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(manifest["license"], "MIT")
+            self.assertEqual(
+                manifest["author"],
+                {
+                    "name": "Ada Lovelace",
+                    "email": "ada@example.com",
+                    "url": "https://example.com/ada",
+                },
+            )
+            self.assertNotIn("license", claude_manifest)
+            self.assertNotIn("author", claude_manifest)
+
+    def test_rejects_empty_or_invalid_optional_metadata(self) -> None:
+        cases = (
+            {"label": "empty-license", "kwargs": {"license_name": "   "}, "needle": "license"},
+            {"label": "empty-author-name", "kwargs": {"author_name": "   "}, "needle": "author"},
+            {
+                "label": "invalid-author-email",
+                "kwargs": {"author_email": "not-an-email"},
+                "needle": "email",
+            },
+            {
+                "label": "invalid-author-url",
+                "kwargs": {"author_url": "mailto:author@example.com"},
+                "needle": "url",
+            },
+        )
+
+        for case in cases:
+            with self.subTest(label=case["label"]):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    destination = Path(temp_dir)
+                    result = run_scaffold(
+                        destination,
+                        "demo-plugin",
+                        clients=["codex"],
+                        **case["kwargs"],
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(case["needle"], result.stderr.lower())
+                    self.assertFalse((destination / "demo-plugin").exists())
 
     def test_creates_mcp_files_only_when_servers_requested(self) -> None:
         server_config = {
