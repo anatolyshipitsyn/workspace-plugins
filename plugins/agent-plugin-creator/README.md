@@ -112,7 +112,8 @@ python3 "${PLUGIN_ROOT}/scripts/validate_plugin.py" \
 
 Static validation checks manifests, paths, skills, and secret hygiene. It does
 not prove MCP runtime behavior; if a generated package includes an MCP server,
-run a separate runtime smoke test.
+run a separate runtime smoke test. Remote MCP header values must stay literal
+in committed manifests; inject runtime auth outside `mcp.json` and `.mcp.json`.
 
 ## No-secret policy
 
@@ -120,7 +121,8 @@ run a separate runtime smoke test.
   secret material.
 - Do not embed secrets in `plugin.json`, `mcp.json`, `.mcp.json`, HTTP
   headers, examples, or docs.
-- Use placeholders or out-of-band configuration for sensitive values.
+- Keep committed header values literal and configure sensitive runtime auth
+  outside the manifest files.
 
 ## Upstream references
 

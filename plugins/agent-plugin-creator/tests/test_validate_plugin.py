@@ -594,7 +594,7 @@ class ValidatePluginTest(unittest.TestCase):
                     self.assertIn(path.name, result.stdout)
                     self.assertIn(needle, result.stdout.lower())
 
-    def test_accepts_placeholder_remote_headers_in_portable_and_claude_configs(self) -> None:
+    def test_rejects_environment_placeholder_remote_headers_in_portable_and_claude_configs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(
                 temp_dir,
@@ -606,17 +606,55 @@ class ValidatePluginTest(unittest.TestCase):
                             "type": "streamable-http",
                             "url": "https://example.com/mcp",
                             "headers": {
-                                "Authorization": "${RUNTIME_BEARER_TOKEN}",
-                                "X-Api-Key": "<replace-with-runtime-key>",
+                                "X-Tenant": "public",
                             },
                         },
                     }
                 ],
             )
+            cases = [
+                (
+                    "portable-streamable-http",
+                    plugin_root / "mcp.json",
+                    '{\n'
+                    f'  "$schema": "{MCP_SCHEMA_ID}",\n'
+                    '  "mcpServers": {\n'
+                    '    "demo": {\n'
+                    '      "type": "streamable-http",\n'
+                    '      "url": "https://example.com/mcp",\n'
+                    '      "headers": {\n'
+                    '        "Authorization": "${RUNTIME_BEARER_TOKEN}"\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n",
+                ),
+                (
+                    "claude-http-adapter",
+                    plugin_root / ".mcp.json",
+                    '{\n'
+                    f'  "$schema": "{MCP_SCHEMA_ID}",\n'
+                    '  "mcpServers": {\n'
+                    '    "demo": {\n'
+                    '      "type": "http",\n'
+                    '      "url": "https://example.com/mcp",\n'
+                    '      "headers": {\n'
+                    '        "X-Api-Key": "${RUNTIME_API_KEY}"\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n",
+                ),
+            ]
 
-            result = run_validate(plugin_root)
-
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for label, path, payload in cases:
+                with self.subTest(label=label):
+                    path.write_text(payload, encoding="utf-8")
+                    result = run_validate(plugin_root)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(path.name, result.stdout)
+                    self.assertIn("header", result.stdout.lower())
+                    self.assertIn("placeholder", result.stdout.lower())
 
     def test_accepts_flow_frontmatter_without_yaml_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -680,12 +718,41 @@ class ValidatePluginTest(unittest.TestCase):
                     None,
                 ),
                 (
+                    "quoted-date-string",
+                    [
+                        "name: review-skill",
+                        'description: "2026-08-27"',
+                    ],
+                    0,
+                    None,
+                ),
+                (
+                    "quoted-time-string",
+                    [
+                        "name: review-skill",
+                        "description: '12:34'",
+                    ],
+                    0,
+                    None,
+                ),
+                (
                     "block-scalar-description",
                     [
                         "name: review-skill",
                         "description: |",
                         "  Review files",
                         "  carefully",
+                    ],
+                    0,
+                    None,
+                ),
+                (
+                    "block-scalar-date-and-time",
+                    [
+                        "name: review-skill",
+                        "description: |",
+                        "  2026-08-27",
+                        "  12:34",
                     ],
                     0,
                     None,
@@ -713,6 +780,24 @@ class ValidatePluginTest(unittest.TestCase):
                     [
                         "name: review-skill",
                         "description: TRUE",
+                    ],
+                    1,
+                    "description",
+                ),
+                (
+                    "date-description",
+                    [
+                        "name: review-skill",
+                        "description: 2026-08-27",
+                    ],
+                    1,
+                    "description",
+                ),
+                (
+                    "time-description",
+                    [
+                        "name: review-skill",
+                        "description: 12:34",
                     ],
                     1,
                     "description",

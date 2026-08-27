@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import datetime
 import ipaddress
 import json
 import os
@@ -42,6 +43,9 @@ SECRET_NAME_PATTERN = re.compile(
     r"(?i)(?:^|[_.-])(?:api[_-]?key|secret|token|password|passwd|private[_-]?key|authorization)$"
 )
 HTTP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+ENVIRONMENT_PLACEHOLDER_PATTERN = re.compile(r"\$\{[^}]+\}")
+YAML_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+YAML_SEXAGESIMAL_PATTERN = re.compile(r"^[-+]?[0-9][0-9_]*(?::[0-9][0-9_]*)+$")
 
 
 class ValidationFailure(Exception):
@@ -396,6 +400,15 @@ def parse_simple_scalar(value: str) -> Any:
         return sign * int(digits, 8)
     if re.fullmatch(r"[-+]?(?:0|[1-9][0-9_]+|[1-9][0-9]*)", value):
         return int(value.replace("_", ""))
+    if YAML_DATE_PATTERN.fullmatch(value):
+        return datetime.date.fromisoformat(value)
+    if YAML_SEXAGESIMAL_PATTERN.fullmatch(value):
+        sign = -1 if value.startswith("-") else 1
+        components = value.lstrip("+-").split(":")
+        total = 0
+        for component in components:
+            total = (total * 60) + int(component.replace("_", ""))
+        return sign * total
     if lowered in {".inf", "+.inf", "-.inf", ".nan"}:
         return float(lowered.replace(".inf", "inf").replace(".nan", "nan"))
     if re.fullmatch(r"[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*(?:[eE][-+]?[0-9]+)?", value) or re.fullmatch(
@@ -1026,6 +1039,10 @@ def is_valid_http_header_value(value: str) -> bool:
     return all(character == "\t" or (31 < ord(character) < 127) for character in value)
 
 
+def contains_environment_placeholder(value: str) -> bool:
+    return ENVIRONMENT_PLACEHOLDER_PATTERN.search(value) is not None
+
+
 def validate_remote_headers(
     diagnostics: list[Diagnostic],
     package_root: Path,
@@ -1075,6 +1092,14 @@ def validate_remote_headers(
                 target_path,
                 f"mcp server {server_name!r} header values must not contain HTTP control characters.",
                 "Remove newlines or other control characters from header values.",
+            )
+        elif isinstance(header_value, str) and contains_environment_placeholder(header_value):
+            add_diagnostic(
+                diagnostics,
+                package_root,
+                target_path,
+                f"mcp server {server_name!r} header values must not contain placeholder or environment expansion syntax.",
+                "Move runtime header injection outside the committed manifest and keep header values literal.",
             )
 
 
