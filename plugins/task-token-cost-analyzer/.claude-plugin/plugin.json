@@ -1,0 +1,5 @@
+{
+  "name": "task-token-cost-analyzer",
+  "version": "0.1.0",
+  "description": "Claude Code adapter for the shared task-token-cost-analyzer package."
+}
