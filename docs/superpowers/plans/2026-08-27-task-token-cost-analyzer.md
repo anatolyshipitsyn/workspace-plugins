@@ -130,8 +130,7 @@ git commit -m "feat: define task token analyzer package contract"
 - `collect_evidence(root: Path) -> EvidenceInventory` records explicitly scoped files by relative path, byte count, line count, and evidence class without reading files outside `root`.
 - `analyze_task(root: Path, events: Path | None = None) -> AnalysisResult` returns deterministic aggregate data with `measured`, `derived`, `estimated`, and `missing` sections.
 - `redact_text(value: str) -> str` removes credential-like values while preserving rule names and aggregate numbers.
-- `render_report(result: AnalysisResult, template: Path) -> str` and `render_update_prompt(result: AnalysisResult, template: Path) -> str` return stable Markdown and never write files.
-- CLI: `python3 analyze_task_cost.py --root PATH --report-out PATH --prompt-out PATH [--events PATH]`; exit `0` for complete/partial analysis and exit `2` for invalid arguments or malformed event data.
+- CLI: `python3 analyze_task_cost.py --root PATH [--events PATH] --format json`; exit `0` for complete/partial analysis and exit `2` for invalid arguments or malformed event data.
 
 - [ ] **Step 1: Write failing analyzer tests**
 
@@ -153,9 +152,9 @@ def test_rejects_malformed_and_negative_event_data_without_echoing_payload(self)
 
 def test_redacts_secret_like_report_content(self):
     result = analyze_task(SECRET_FIXTURE_ROOT)
-    report = render_report(result, REPORT_TEMPLATE)
-    self.assertNotIn("secret-value", report)
-    self.assertIn("redacted", report.lower())
+    serialized = json.dumps(result.to_dict(), sort_keys=True)
+    self.assertNotIn("secret-value", serialized)
+    self.assertIn("redacted", serialized.lower())
 ```
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest plugins/task-token-cost-analyzer/tests/test_analyze_task_cost.py`
@@ -210,6 +209,8 @@ git commit -m "feat: analyze task token cost from local evidence"
 **Interfaces:**
 
 - The skill invokes `scripts/analyze_task_cost.py` with an explicitly scoped task root and optional normalized event file.
+- `render_report(result: AnalysisResult, template: Path) -> str` and `render_update_prompt(result: AnalysisResult, template: Path) -> str` return stable Markdown and never write files.
+- CLI: `python3 analyze_task_cost.py --root PATH --report-out PATH --prompt-out PATH [--events PATH]`; the explicit output paths are validated as descendants of their selected output directory.
 - The report has sections `Scope`, `Evidence`, `Acceptance Matrix`, `Cost Breakdown`, `Avoidable Costs`, `Recommendations`, and `Limitations`.
 - The update prompt has sections `Target Files`, `Problem`, `Proposed Change`, `Acceptance Tests`, and `Safety Constraints`; it asks for a bounded plugin update and changelog/report entry without applying changes.
 - The skill requires a local adversarial audit before the first independent review and recommends one batched validator fix round when multiple findings share the same validation surface.
@@ -284,6 +285,7 @@ git commit -m "feat: add task cost analysis workflow and update prompt"
 **Files:**
 
 - Create: `tests/test_task_token_cost_analyzer.py`
+- Modify: `tests/test_plugin_suite.py`
 - Modify: `README.md`
 - Modify: `DECISIONS.md`
 - Modify: `plugins/task-token-cost-analyzer/tests/test_analyze_task_cost.py`
@@ -341,7 +343,7 @@ mandatory hooks, network calls, or automatic self-edits.
 - [ ] **Step 5: Commit repository integration**
 
 ```bash
-git add README.md DECISIONS.md tests/test_task_token_cost_analyzer.py \
+git add README.md DECISIONS.md tests/test_task_token_cost_analyzer.py tests/test_plugin_suite.py \
   plugins/task-token-cost-analyzer
 git commit -m "test: verify task token analyzer integration"
 ```
