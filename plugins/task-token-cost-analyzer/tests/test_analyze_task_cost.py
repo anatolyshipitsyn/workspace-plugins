@@ -1,0 +1,449 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[3]
+PLUGIN_ROOT = ROOT / "plugins" / "task-token-cost-analyzer"
+SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "analyze_task_cost.py"
+FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
+MINIMAL_TASK_ROOT = FIXTURES / "minimal-task"
+EVENTS = FIXTURES / "events"
+
+
+def load_analyzer(testcase: unittest.TestCase):
+    testcase.assertTrue(SCRIPT_PATH.is_file(), f"missing analyzer script: {SCRIPT_PATH}")
+    spec = importlib.util.spec_from_file_location("analyze_task_cost", SCRIPT_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to import {SCRIPT_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    previous_module = sys.modules.get(spec.name)
+    sys.modules[spec.name] = module
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if previous_module is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous_module
+        sys.dont_write_bytecode = previous_dont_write_bytecode
+    return module
+
+
+def run_cli(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    command = [
+        "python3",
+        str(SCRIPT_PATH),
+        "--root",
+        str(root),
+        "--format",
+        "json",
+        *args,
+    ]
+    return subprocess.run(
+        command,
+        text=True,
+        capture_output=True,
+        check=False,
+        cwd=ROOT,
+    )
+
+
+def write_json(path: Path, payload: object) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def write_jsonl(path: Path, records: list[object]) -> Path:
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+    return path
+
+
+class AnalyzerCoreTests(unittest.TestCase):
+    maxDiff = None
+
+    def test_aggregates_measured_event_tokens(self) -> None:
+        analyzer = load_analyzer(self)
+
+        result = analyzer.analyze_task(FIXTURES, EVENTS / "codex-usage.json")
+
+        self.assertEqual(result.measured["total_tokens"], 3000)
+        self.assertEqual(result.measured["input_tokens"], 1800)
+        self.assertEqual(result.measured["output_tokens"], 1200)
+        self.assertEqual(result.evidence["token_counts"], "measured")
+        self.assertEqual(result.evidence["durations"], "measured")
+
+    def test_load_events_maps_claude_hook_and_codex_export_from_json_array(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            events_path = write_json(
+                Path(temp_dir) / "events.json",
+                [
+                    {
+                        "hook_event_name": "Stop",
+                        "session_id": "claude-hook-session-001",
+                        "timestamp": "2026-08-27T09:00:00Z",
+                        "model": "claude-sonnet-4",
+                        "usage": {"input_tokens": 700, "output_tokens": 300},
+                        "duration_ms": 1110,
+                        "prompt": "secret-prompt",
+                        "raw_body": {"api_key": "example-secret"},
+                    },
+                    {
+                        "exported_from": "codex",
+                        "event_type": "response.completed",
+                        "session_id": "codex-export-session-001",
+                        "created_at": "2026-08-27T09:01:00Z",
+                        "model_slug": "gpt-5-codex",
+                        "usage": {"prompt_tokens": 1000, "completion_tokens": 400, "total_tokens": 1400},
+                        "duration_ms": 900,
+                        "transcript": "secret-transcript",
+                    },
+                ],
+            )
+
+            events = analyzer.load_events(events_path)
+
+        self.assertEqual(
+            events,
+            [
+                {
+                    "client": "claude",
+                    "session_id_hash": "claude-hook-session-001",
+                    "event": "stop",
+                    "timestamp": "2026-08-27T09:00:00Z",
+                    "model": "claude-sonnet-4",
+                    "input_tokens": 700,
+                    "output_tokens": 300,
+                    "total_tokens": 1000,
+                    "duration_ms": 1110,
+                },
+                {
+                    "client": "codex",
+                    "session_id_hash": "codex-export-session-001",
+                    "event": "api_response",
+                    "timestamp": "2026-08-27T09:01:00Z",
+                    "model": "gpt-5-codex",
+                    "input_tokens": 1000,
+                    "output_tokens": 400,
+                    "total_tokens": 1400,
+                    "duration_ms": 900,
+                },
+            ],
+        )
+
+    def test_load_events_maps_claude_otel_jsonl_and_discards_raw_fields(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            events_path = write_jsonl(
+                Path(temp_dir) / "events.jsonl",
+                [
+                    {
+                        "otel_scope": "claude",
+                        "attributes": {
+                            "event.name": "PostToolUse",
+                            "session.id": "claude-otel-session-001",
+                            "gen_ai.response.model": "claude-sonnet-4",
+                            "gen_ai.usage.input_tokens": 400,
+                            "gen_ai.usage.output_tokens": 100,
+                            "gen_ai.latency.ms": 320,
+                        },
+                        "timestamp": "2026-08-27T09:02:00Z",
+                        "prompt": "secret-prompt",
+                        "transcript": "secret-transcript",
+                    },
+                    {
+                        "otel_scope": "claude",
+                        "attributes": {
+                            "event.name": "Stop",
+                            "session.id": "claude-otel-session-002",
+                            "gen_ai.response.model": "claude-sonnet-4",
+                            "gen_ai.usage.input_tokens": 200,
+                            "gen_ai.usage.output_tokens": 50,
+                            "gen_ai.latency.ms": 180,
+                        },
+                        "timestamp": "2026-08-27T09:03:00Z",
+                        "raw_body": {"authorization": "example-token"},
+                    },
+                ],
+            )
+
+            events = analyzer.load_events(events_path)
+
+        self.assertEqual([event["event"] for event in events], ["api_response", "stop"])
+        self.assertEqual([event["total_tokens"] for event in events], [500, 250])
+        self.assertTrue(all(set(event) == set(analyzer.NORMALIZED_EVENT_FIELDS) for event in events))
+        serialized = json.dumps(events, sort_keys=True)
+        self.assertNotIn("secret-prompt", serialized)
+        self.assertNotIn("secret-transcript", serialized)
+        self.assertNotIn("example-secret", serialized)
+
+    def test_marks_missing_tokens_as_estimated_or_missing(self) -> None:
+        analyzer = load_analyzer(self)
+
+        result = analyzer.analyze_task(MINIMAL_TASK_ROOT)
+
+        self.assertIn(result.evidence["token_counts"], {"estimated", "missing"})
+        self.assertNotIn("exact_total_tokens", result.measured)
+        self.assertGreater(result.derived["artifact_bytes"], 0)
+
+    def test_collects_relative_evidence_inventory(self) -> None:
+        analyzer = load_analyzer(self)
+
+        inventory = analyzer.collect_evidence(MINIMAL_TASK_ROOT)
+
+        self.assertEqual(
+            [item.relative_path for item in inventory.files],
+            ["plan.md", "progress.md", "task-report.md"],
+        )
+        self.assertEqual(
+            [item.evidence_class for item in inventory.files],
+            ["plan", "progress", "report"],
+        )
+        self.assertTrue(all(not Path(item.relative_path).is_absolute() for item in inventory.files))
+
+    def test_allows_explicit_absolute_event_paths_outside_root(self) -> None:
+        analyzer = load_analyzer(self)
+
+        result = analyzer.analyze_task(MINIMAL_TASK_ROOT, EVENTS / "codex-usage.json")
+
+        self.assertEqual(result.measured["total_tokens"], 3000)
+        self.assertEqual(result.evidence["token_counts"], "measured")
+
+    def test_cli_resolves_root_relative_events_path(self) -> None:
+        self.assertTrue(SCRIPT_PATH.is_file(), f"missing analyzer script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "plan.md").write_text("# Plan\n", encoding="utf-8")
+            events_path = write_jsonl(
+                root / "events.jsonl",
+                [
+                    {
+                        "exported_from": "codex",
+                        "event_type": "stop",
+                        "session_id": "codex-export-session-002",
+                        "created_at": "2026-08-27T09:05:00Z",
+                        "model_slug": "gpt-5-codex",
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140},
+                        "duration_ms": 120,
+                    }
+                ],
+            )
+
+            completed = run_cli(root, "--events", events_path.name)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["measured"]["total_tokens"], 140)
+        self.assertEqual(payload["evidence"]["token_counts"], "measured")
+
+    def test_cli_rejects_root_relative_event_paths_that_escape_root(self) -> None:
+        self.assertTrue(SCRIPT_PATH.is_file(), f"missing analyzer script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            root = workspace / "task-root"
+            root.mkdir()
+            (root / "plan.md").write_text("# Plan\n", encoding="utf-8")
+            events_path = write_jsonl(
+                workspace / "events.jsonl",
+                [
+                    {
+                        "exported_from": "codex",
+                        "event_type": "stop",
+                        "session_id": "codex-export-session-002",
+                        "created_at": "2026-08-27T09:05:00Z",
+                        "model_slug": "gpt-5-codex",
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140},
+                        "duration_ms": 120,
+                    }
+                ],
+            )
+
+            completed = run_cli(root, "--events", "../events.jsonl")
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("outside the requested root", completed.stderr)
+
+    def test_rejects_malformed_and_negative_event_data_without_echoing_payload(self) -> None:
+        self.assertTrue(SCRIPT_PATH.is_file(), f"missing analyzer script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "task-report.md").write_text("# Report\n", encoding="utf-8")
+            malformed = root / "bad-events.json"
+            malformed.write_text(
+                json.dumps(
+                    {
+                        "client": "codex",
+                        "session_id_hash": "session-1",
+                        "event": "stop",
+                        "timestamp": "2026-08-27T08:17:00Z",
+                        "model": "gpt-5-codex",
+                        "input_tokens": -1,
+                        "output_tokens": 2,
+                        "total_tokens": 1,
+                        "duration_ms": 100,
+                        "raw_body": "example-secret",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            completed = run_cli(root, "--events", str(malformed))
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertNotIn("example-secret", completed.stderr)
+
+    def test_redacts_secret_like_report_content(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "plan.md").write_text("Rule 7 expects 42 tokens.\n", encoding="utf-8")
+            (root / "task-report.md").write_text(
+                "Authorization: Bearer example-secret\napi_key=example-secret\nRule 7 kept 42.\n",
+                encoding="utf-8",
+            )
+
+            result = analyzer.analyze_task(root)
+
+        serialized = json.dumps(result.to_dict(), sort_keys=True)
+        self.assertNotIn("example-secret", serialized)
+        self.assertIn("redacted", serialized.lower())
+
+    def test_redact_text_preserves_rule_names_and_numbers(self) -> None:
+        analyzer = load_analyzer(self)
+
+        redacted = analyzer.redact_text("Rule 7 token=example-secret count=42")
+
+        self.assertIn("Rule 7", redacted)
+        self.assertIn("42", redacted)
+        self.assertNotIn("example-secret", redacted)
+
+    def test_load_events_allows_non_secret_metadata_names(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            events_path = write_json(
+                Path(temp_dir) / "events.json",
+                [
+                    {
+                        "exported_from": "codex",
+                        "event_type": "response.completed",
+                        "session_id": "codex-export-session-004",
+                        "created_at": "2026-08-27T10:10:00Z",
+                        "model_slug": "gpt-5-codex",
+                        "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150},
+                        "duration_ms": 95,
+                        "metadata": {
+                            "secretary": "Ada Lovelace",
+                            "tokenizer_name": "bpe",
+                            "review_label": "round-1",
+                        },
+                    }
+                ],
+            )
+
+            events = analyzer.load_events(events_path)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["client"], "codex")
+        self.assertEqual(events[0]["total_tokens"], 150)
+
+    def test_analyze_task_counts_nested_duplicates_and_verbose_logs(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "plan.md").write_text("Plan\n", encoding="utf-8")
+            (root / "nested").mkdir()
+            (root / "nested" / "plan-copy.md").write_text("More plan\n", encoding="utf-8")
+            (root / "review.md").write_text("Review one\n", encoding="utf-8")
+            (root / "nested" / "review-notes.md").write_text("Review two\n", encoding="utf-8")
+            (root / "secretary-notes.md").write_text("Scheduler notes only.\n", encoding="utf-8")
+            (root / "logs").mkdir()
+            (root / "logs" / "focused-test.log").write_text(
+                "\n".join(f"line {index}" for index in range(220)) + "\n",
+                encoding="utf-8",
+            )
+
+            result = analyzer.analyze_task(root)
+
+        self.assertEqual(result.derived["repeated_context_files"], 2)
+        self.assertEqual(result.derived["review_file_count"], 2)
+        self.assertEqual(result.derived["verbose_log_files"], 1)
+        self.assertEqual(result.evidence["secret_scrubbing"], "missing")
+
+    def test_acceptance_matrix_marks_partial_client_telemetry_as_applicable(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "task-report.md").write_text("Aggregate report only.\n", encoding="utf-8")
+            events_path = write_json(
+                root / "events.json",
+                [
+                    {
+                        "client": "codex",
+                        "session_id_hash": "codex-session-1",
+                        "event": "stop",
+                        "timestamp": "2026-08-27T11:00:00Z",
+                        "model": "gpt-5-codex",
+                        "input_tokens": 80,
+                        "output_tokens": 20,
+                        "total_tokens": 100,
+                        "duration_ms": 50,
+                    },
+                    {
+                        "client": "claude",
+                        "session_id_hash": "claude-session-1",
+                        "event": "api_response",
+                        "timestamp": "2026-08-27T11:01:00Z",
+                        "model": "claude-sonnet-4",
+                        "input_tokens": 60,
+                        "output_tokens": 15,
+                        "total_tokens": 75,
+                        "duration_ms": 35,
+                    },
+                ],
+            )
+
+            result = analyzer.analyze_task(root, events_path)
+
+        matrix = analyzer.build_acceptance_matrix(result)
+
+        self.assertIn("| Area | Status | Confidence | Evidence |", matrix)
+        self.assertIn("| Codex | applicable |", matrix)
+        self.assertIn("| Claude | applicable |", matrix)
+        self.assertNotIn("| Codex | pass |", matrix)
+        self.assertNotIn("| Claude | pass |", matrix)
+
+    def test_acceptance_matrix_marks_yaml_without_validation_as_applicable(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "settings.yaml").write_text("mode: offline\n", encoding="utf-8")
+
+            result = analyzer.analyze_task(root)
+
+        matrix = analyzer.build_acceptance_matrix(result)
+
+        self.assertIn("| YAML | applicable |", matrix)
+        self.assertNotIn("| YAML | pass |", matrix)
+
+
+if __name__ == "__main__":
+    unittest.main()

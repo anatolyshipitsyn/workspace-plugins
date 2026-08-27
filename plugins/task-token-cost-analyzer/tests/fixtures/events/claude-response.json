@@ -1,0 +1,11 @@
+{
+  "client": "claude",
+  "session_id_hash": "claude-session-001",
+  "event": "compaction",
+  "timestamp": "2026-08-27T08:15:45Z",
+  "model": "claude-sonnet-4",
+  "input_tokens": 900,
+  "output_tokens": 600,
+  "total_tokens": 1500,
+  "duration_ms": 950
+}

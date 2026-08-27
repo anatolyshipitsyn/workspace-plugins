@@ -6,10 +6,12 @@ import sys
 
 
 _TEST_ROOT = Path(__file__).parent
-_BYTECODE_ROOTS = (
-    _TEST_ROOT,
-    _TEST_ROOT.parent / "plugins" / "agent-plugin-creator" / "tests",
+_PLUGIN_TEST_ROOTS = tuple(
+    path
+    for path in sorted((_TEST_ROOT.parent / "plugins").glob("*/tests"))
+    if path.is_dir()
 )
+_BYTECODE_ROOTS = (_TEST_ROOT, *_PLUGIN_TEST_ROOTS)
 _PRIOR_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
 
 # Discovery imports this package before importing any repository test modules.

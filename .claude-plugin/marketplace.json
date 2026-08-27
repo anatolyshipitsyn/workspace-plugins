@@ -17,6 +17,11 @@
       "name": "github-pr-agent",
       "source": "./plugins/github-pr-agent",
       "description": "Create, update, and safely babysit GitHub pull requests with a token-frugal CI and review watcher."
+    },
+    {
+      "name": "task-token-cost-analyzer",
+      "source": "./plugins/task-token-cost-analyzer",
+      "description": "Analyze completed-task token and process cost from local aggregate evidence without network access or automatic edits."
     }
   ]
 }

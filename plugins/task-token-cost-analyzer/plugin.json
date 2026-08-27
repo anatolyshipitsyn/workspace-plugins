@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "task-token-cost-analyzer",
+  "version": "0.1.0",
+  "description": "Analyze the token and process cost of a completed engineering task from local aggregate evidence without network access.",
+  "license": "Apache-2.0",
+  "keywords": [
+    "agent-plugin",
+    "task-analysis",
+    "token-cost",
+    "offline"
+  ]
+}

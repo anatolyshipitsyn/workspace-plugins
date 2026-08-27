@@ -281,6 +281,23 @@ The watcher emits one compact JSON line per snapshot and, in continuous mode,
 prints only when the state an agent would act on has changed. The package
 README documents the snapshot shape and the flags that restore fuller output.
 
+## Using `task-token-cost-analyzer`
+
+`plugins/task-token-cost-analyzer` is an optional analysis package for completed
+task folders. It stays offline, uses local aggregate evidence by default, and
+does not require hooks or client-specific telemetry to be installed.
+
+Typical flow:
+
+1. Point the analyzer at an explicitly selected completed task root.
+2. Add `--events PATH` only when you already have a local normalized Codex or
+   Claude aggregate export.
+3. Review the generated report and update prompt before acting on them.
+
+The analyzer package README documents the package-level details, including the
+optional adapter boundary, aggregate-only defaults, and the "do not install hooks"
+rule.
+
 ## Loading checks
 
 These checks are about a single plugin package, not about connecting the
@@ -321,6 +338,8 @@ Before treating a plugin package as complete, verify:
 - every discovered `SKILL.md` is valid;
 - no secrets, `.env` files, symlinks that escape the package root, or generated
   artifacts are present;
-- documentation describes the current release-selection policy and client
-  loading rules;
+- documentation describes the current release-selection policy, optional client
+  loading rules, and any aggregate-only analyzer boundaries;
+- adversarial coverage includes malformed local telemetry, path escape, repeated
+  context, verbose-log noise, and secret-like values without leaking them;
 - focused tests and the repository checks in `AGENTS.md` pass.
