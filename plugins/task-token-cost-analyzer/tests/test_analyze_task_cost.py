@@ -96,7 +96,7 @@ class AnalyzerCoreTests(unittest.TestCase):
                         "usage": {"input_tokens": 700, "output_tokens": 300},
                         "duration_ms": 1110,
                         "prompt": "secret-prompt",
-                        "raw_body": {"api_key": "secret-value"},
+                        "raw_body": {"api_key": "example-secret"},
                     },
                     {
                         "exported_from": "codex",
@@ -173,7 +173,7 @@ class AnalyzerCoreTests(unittest.TestCase):
                             "gen_ai.latency.ms": 180,
                         },
                         "timestamp": "2026-08-27T09:03:00Z",
-                        "raw_body": {"authorization": "Bearer secret-value"},
+                        "raw_body": {"authorization": "example-token"},
                     },
                 ],
             )
@@ -186,7 +186,7 @@ class AnalyzerCoreTests(unittest.TestCase):
         serialized = json.dumps(events, sort_keys=True)
         self.assertNotIn("secret-prompt", serialized)
         self.assertNotIn("secret-transcript", serialized)
-        self.assertNotIn("secret-value", serialized)
+        self.assertNotIn("example-secret", serialized)
 
     def test_marks_missing_tokens_as_estimated_or_missing(self) -> None:
         analyzer = load_analyzer(self)
@@ -265,7 +265,7 @@ class AnalyzerCoreTests(unittest.TestCase):
                         "output_tokens": 2,
                         "total_tokens": 1,
                         "duration_ms": 100,
-                        "raw_body": "secret-value",
+                        "raw_body": "example-secret",
                     }
                 ),
                 encoding="utf-8",
@@ -274,7 +274,7 @@ class AnalyzerCoreTests(unittest.TestCase):
             completed = run_cli(root, "--events", str(malformed))
 
         self.assertEqual(completed.returncode, 2)
-        self.assertNotIn("secret-value", completed.stderr)
+        self.assertNotIn("example-secret", completed.stderr)
 
     def test_redacts_secret_like_report_content(self) -> None:
         analyzer = load_analyzer(self)
@@ -283,24 +283,78 @@ class AnalyzerCoreTests(unittest.TestCase):
             root = Path(temp_dir)
             (root / "plan.md").write_text("Rule 7 expects 42 tokens.\n", encoding="utf-8")
             (root / "task-report.md").write_text(
-                "Authorization: Bearer secret-value\napi_key=secret-value\nRule 7 kept 42.\n",
+                "Authorization: Bearer example-secret\napi_key=example-secret\nRule 7 kept 42.\n",
                 encoding="utf-8",
             )
 
             result = analyzer.analyze_task(root)
 
         serialized = json.dumps(result.to_dict(), sort_keys=True)
-        self.assertNotIn("secret-value", serialized)
+        self.assertNotIn("example-secret", serialized)
         self.assertIn("redacted", serialized.lower())
 
     def test_redact_text_preserves_rule_names_and_numbers(self) -> None:
         analyzer = load_analyzer(self)
 
-        redacted = analyzer.redact_text("Rule 7 token=secret-value count=42")
+        redacted = analyzer.redact_text("Rule 7 token=example-secret count=42")
 
         self.assertIn("Rule 7", redacted)
         self.assertIn("42", redacted)
-        self.assertNotIn("secret-value", redacted)
+        self.assertNotIn("example-secret", redacted)
+
+    def test_load_events_allows_non_secret_metadata_names(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            events_path = write_json(
+                Path(temp_dir) / "events.json",
+                [
+                    {
+                        "exported_from": "codex",
+                        "event_type": "response.completed",
+                        "session_id": "codex-export-session-004",
+                        "created_at": "2026-08-27T10:10:00Z",
+                        "model_slug": "gpt-5-codex",
+                        "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150},
+                        "duration_ms": 95,
+                        "metadata": {
+                            "secretary": "Ada Lovelace",
+                            "tokenizer_name": "bpe",
+                            "review_label": "round-1",
+                        },
+                    }
+                ],
+            )
+
+            events = analyzer.load_events(events_path)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["client"], "codex")
+        self.assertEqual(events[0]["total_tokens"], 150)
+
+    def test_analyze_task_counts_nested_duplicates_and_verbose_logs(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "plan.md").write_text("Plan\n", encoding="utf-8")
+            (root / "nested").mkdir()
+            (root / "nested" / "plan-copy.md").write_text("More plan\n", encoding="utf-8")
+            (root / "review.md").write_text("Review one\n", encoding="utf-8")
+            (root / "nested" / "review-notes.md").write_text("Review two\n", encoding="utf-8")
+            (root / "secretary-notes.md").write_text("Scheduler notes only.\n", encoding="utf-8")
+            (root / "logs").mkdir()
+            (root / "logs" / "focused-test.log").write_text(
+                "\n".join(f"line {index}" for index in range(220)) + "\n",
+                encoding="utf-8",
+            )
+
+            result = analyzer.analyze_task(root)
+
+        self.assertEqual(result.derived["repeated_context_files"], 2)
+        self.assertEqual(result.derived["review_file_count"], 2)
+        self.assertEqual(result.derived["verbose_log_files"], 1)
+        self.assertEqual(result.evidence["secret_scrubbing"], "missing")
 
 
 if __name__ == "__main__":

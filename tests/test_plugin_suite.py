@@ -11,15 +11,22 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_TESTS = (
-    ("agent_plugin_creator_tests.test_scaffold_plugin", ROOT / "plugins" / "agent-plugin-creator" / "tests" / "test_scaffold_plugin.py"),
-    ("agent_plugin_creator_tests.test_validate_plugin", ROOT / "plugins" / "agent-plugin-creator" / "tests" / "test_validate_plugin.py"),
-    ("agent_plugin_creator_tests.test_package", ROOT / "plugins" / "agent-plugin-creator" / "tests" / "test_package.py"),
-)
 REGISTRY_PATH = ROOT / "plugins" / "agent-plugin-creator" / "specs" / "registry.json"
 ORIGINAL_REGISTRY = REGISTRY_PATH.read_bytes()
 ORIGINAL_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
 _ISOLATED_WORKSPACES: list[tempfile.TemporaryDirectory[str]] = []
+
+
+def discover_plugin_tests() -> list[tuple[str, Path]]:
+    plugin_tests: list[tuple[str, Path]] = []
+    for plugin_root in sorted((ROOT / "plugins").glob("*")):
+        tests_root = plugin_root / "tests"
+        if not tests_root.is_dir():
+            continue
+        module_prefix = f"{plugin_root.name.replace('-', '_')}_tests"
+        for path in sorted(tests_root.glob("test_*.py")):
+            plugin_tests.append((f"{module_prefix}.{path.stem}", path))
+    return plugin_tests
 
 
 def _load_module(module_name: str, path: Path) -> types.ModuleType:
@@ -37,33 +44,46 @@ def _load_module(module_name: str, path: Path) -> types.ModuleType:
     return module
 
 
+def _rewrite_isolated_value(value: object, isolated_root: Path) -> object:
+    if isinstance(value, Path):
+        try:
+            relative_path = value.relative_to(ROOT)
+        except ValueError:
+            return value
+        return isolated_root / relative_path
+    if isinstance(value, tuple):
+        return tuple(_rewrite_isolated_value(item, isolated_root) for item in value)
+    if isinstance(value, list):
+        return [_rewrite_isolated_value(item, isolated_root) for item in value]
+    if isinstance(value, set):
+        return {_rewrite_isolated_value(item, isolated_root) for item in value}
+    if isinstance(value, dict):
+        return {
+            key: _rewrite_isolated_value(item, isolated_root) for key, item in value.items()
+        }
+    return value
+
+
 def _load_isolated_plugin_tests() -> list[types.ModuleType]:
     previous_dont_write_bytecode = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
     try:
-        workspace = tempfile.TemporaryDirectory(prefix="agent-plugin-creator-tests-")
+        workspace = tempfile.TemporaryDirectory(prefix="repository-plugin-tests-")
         _ISOLATED_WORKSPACES.append(workspace)
-
         isolated_root = Path(workspace.name)
-        isolated_plugin = isolated_root / "plugins" / "agent-plugin-creator"
-        source_plugin = ROOT / "plugins" / "agent-plugin-creator"
-
         shutil.copytree(
-            source_plugin,
-            isolated_plugin,
+            ROOT / "plugins",
+            isolated_root / "plugins",
             ignore=shutil.ignore_patterns("__pycache__"),
         )
 
         modules = []
-        for module_name, path in PLUGIN_TESTS:
+        for module_name, path in discover_plugin_tests():
             module = _load_module(module_name, path)
             for name, value in vars(module).items():
-                if isinstance(value, Path):
-                    try:
-                        relative_path = value.relative_to(ROOT)
-                    except ValueError:
-                        continue
-                    setattr(module, name, isolated_root / relative_path)
+                rewritten = _rewrite_isolated_value(value, isolated_root)
+                if rewritten is not value:
+                    setattr(module, name, rewritten)
             modules.append(module)
         return modules
     finally:

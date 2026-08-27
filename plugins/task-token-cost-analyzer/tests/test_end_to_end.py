@@ -133,7 +133,7 @@ class EndToEndContractTests(unittest.TestCase):
             root = Path(temp_dir)
             (root / "plan.md").write_text("Plan keeps scope bounded.\n", encoding="utf-8")
             (root / "task-report.md").write_text(
-                "Authorization: Bearer secret-value\napi_key=secret-value\n",
+                "Authorization: Bearer example-secret\napi_key=example-secret\n",
                 encoding="utf-8",
             )
 
@@ -145,6 +145,76 @@ class EndToEndContractTests(unittest.TestCase):
         self.assertIn("| Security | pass |", report)
         self.assertIn("redacted secret-like values", report)
         self.assertNotIn("| Security | not observed |", report)
+
+    def test_adversarial_fixture_stays_deterministic_and_aggregate_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            root = temp_root / "task-root"
+            root.mkdir()
+            (root / "plan.md").write_text("Primary plan.\n", encoding="utf-8")
+            (root / "task-report.md").write_text(
+                "Authorization: Bearer example-secret\nRule 7 kept 42.\n",
+                encoding="utf-8",
+            )
+            (root / "nested").mkdir()
+            (root / "nested" / "plan-copy.md").write_text("Repeated plan context.\n", encoding="utf-8")
+            (root / "nested" / "review.md").write_text("Second review.\n", encoding="utf-8")
+            (root / "focused-tests.log").write_text(
+                "\n".join(f"line {index}" for index in range(220)) + "\n",
+                encoding="utf-8",
+            )
+            events = root / "events.json"
+            events.write_text(
+                json.dumps(
+                    [
+                        {
+                            "exported_from": "codex",
+                            "event_type": "stop",
+                            "session_id": "codex-export-session-005",
+                            "created_at": "2026-08-27T10:12:00Z",
+                            "model_slug": "gpt-5-codex",
+                            "usage": {"prompt_tokens": 60, "completion_tokens": 20, "total_tokens": 80},
+                            "duration_ms": 45,
+                            "metadata": {
+                                "secretary": "Ada Lovelace",
+                                "tokenizer_name": "bpe",
+                                "relative_review_path": "../outside",
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            first_output_dir = temp_root / "run-one"
+            second_output_dir = temp_root / "run-two"
+            first_output_dir.mkdir()
+            second_output_dir.mkdir()
+
+            first_report_out = first_output_dir / "report.md"
+            first_prompt_out = first_output_dir / "prompt.md"
+            second_report_out = second_output_dir / "report.md"
+            second_prompt_out = second_output_dir / "prompt.md"
+
+            first = run_analyzer(root, events, first_report_out, first_prompt_out)
+            second = run_analyzer(root, events, second_report_out, second_prompt_out)
+
+            first_report = first_report_out.read_text(encoding="utf-8")
+            first_prompt = first_prompt_out.read_text(encoding="utf-8")
+            second_report = second_report_out.read_text(encoding="utf-8")
+            second_prompt = second_prompt_out.read_text(encoding="utf-8")
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(json.loads(first.stdout), json.loads(second.stdout))
+        self.assertEqual(first_report, second_report)
+        self.assertEqual(first_prompt, second_prompt)
+        self.assertIn("Repeated context files: 1", first_report)
+        self.assertIn("Verbose log files: 1", first_report)
+        self.assertNotIn("example-secret", first_report)
+        self.assertNotIn("example-secret", first_prompt)
+        self.assertNotIn("../outside", first_report)
+        self.assertNotIn("../outside", first_prompt)
 
     def test_skill_routes_to_cli_and_documents_pressure_guardrails(self) -> None:
         for path in (SKILL_PATH, README_PATH, CHANGELOG_PATH):

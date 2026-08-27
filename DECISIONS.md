@@ -83,3 +83,40 @@ schema-version changes flow through explicit registry updates.
 If these decisions are wrong, generated plugins could drift from the upstream
 published contract, duplicate files across clients, or force breaking changes
 in later generator and validator tasks.
+
+## 2026-08-27: Task analyzer repository integration boundary
+
+### Decision
+
+- `task-token-cost-analyzer` is an optional repository package, not a mandatory
+  repository hook or client dependency.
+- The analyzer reports aggregate-only local evidence by default and marks
+  missing telemetry as estimated or missing instead of pretending precision.
+- Generated update prompts remain review artifacts with a "do not apply automatically" rule.
+
+### Context
+
+Task 4 integrates the analyzer into repository discovery, documentation, and
+final package gates. The repository already supports multiple portable plugins,
+so the analyzer must fit the same offline, self-contained workflow without
+widening repository policy.
+
+### Reason
+
+Keeping the analyzer optional preserves portability across clients and local
+setups. Aggregate-only defaults avoid overclaiming token accuracy when no
+normalized telemetry exists. Non-applying update prompts keep the package in a
+read-only advisory role instead of silently self-modifying the repository.
+
+### Consequences
+
+Repository docs must describe the optional adapter boundary, instruct users not
+to install hooks, and keep adversarial/package checks local. Root discovery and
+validation must include the analyzer package without duplicating shared code or
+requiring network access.
+
+### Cost If Wrong
+
+If these decisions are wrong, the repository could imply mandatory hooks,
+pretend estimated telemetry is exact, or let generated prompts cross the line
+from recommendation into automatic repository edits.

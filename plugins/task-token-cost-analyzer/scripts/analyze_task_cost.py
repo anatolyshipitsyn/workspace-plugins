@@ -51,7 +51,16 @@ SECRET_PATTERNS = (
     re.compile(r"(?i)\b(api[_-]?key|token|secret|password|passwd)\b(\s*[:=]\s*)([^\s,;]+)"),
     re.compile(r"\b(sk|ghp|gho|ghu|xoxb|xoxp)-[A-Za-z0-9._-]+\b"),
 )
-SECRET_KEY_PATTERN = re.compile(r"(?i)(^token$|access[_-]?token|auth[_-]?token|api[_-]?key|secret|password|passwd|authorization)")
+SECRET_KEY_NAMES = {
+    "token",
+    "access_token",
+    "auth_token",
+    "api_key",
+    "secret",
+    "password",
+    "passwd",
+    "authorization",
+}
 SCRIPT_PATH = Path(__file__).resolve()
 PLUGIN_ROOT = SCRIPT_PATH.parents[1]
 REPORT_TEMPLATE_PATH = PLUGIN_ROOT / "templates" / "cost-report.md"
@@ -478,7 +487,8 @@ def ensure_no_secret_fields(record: object, parent_key: str | None = None) -> No
             lowered = key_name.lower()
             if lowered in IGNORED_EXPORT_FIELDS:
                 continue
-            if SECRET_KEY_PATTERN.search(lowered):
+            normalized_key = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+            if normalized_key in SECRET_KEY_NAMES:
                 raise ValueError(f"Event data contains forbidden raw fields: {key_name}")
             ensure_no_secret_fields(value, key_name)
         return

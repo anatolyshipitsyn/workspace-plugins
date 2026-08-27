@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import types
 import unittest
 
@@ -108,6 +109,16 @@ def validate_manifest(path: Path) -> list[str]:
     return [diagnostic.render() for diagnostic in diagnostics]
 
 
+def run_validate(path: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["python3", str(VALIDATOR_SCRIPT), str(path)],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+
+
 class PackageContractTest(unittest.TestCase):
     maxDiff = None
 
@@ -126,6 +137,40 @@ class PackageContractTest(unittest.TestCase):
     def test_event_fixture_contains_only_normalized_aggregate_fields(self) -> None:
         for event_path in EVENT_FIXTURES:
             self.assert_normalized_aggregate_event(event_path)
+
+    def test_package_passes_shared_validator_and_omits_optional_mcp_files(self) -> None:
+        result = run_validate(PLUGIN_ROOT)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertFalse((PLUGIN_ROOT / "mcp.json").exists())
+        self.assertFalse((PLUGIN_ROOT / ".mcp.json").exists())
+
+    def test_package_tree_stays_local_and_read_only(self) -> None:
+        script_text = ANALYZER_SCRIPT.read_text(encoding="utf-8")
+        help_result = subprocess.run(
+            ["python3", str(ANALYZER_SCRIPT), "--help"],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            check=False,
+        )
+
+        self.assertEqual(help_result.returncode, 0, help_result.stdout + help_result.stderr)
+        self.assertIn("--root", help_result.stdout)
+        self.assertIn("--events", help_result.stdout)
+        self.assertIn("--report-out", help_result.stdout)
+        self.assertIn("--prompt-out", help_result.stdout)
+        self.assertNotIn("--spec-version", help_result.stdout)
+        self.assertNotIn("requests", script_text)
+        self.assertNotIn("urllib.request", script_text)
+        self.assertNotIn("http.client", script_text)
+        self.assertIn("Do not install hooks", script_text)
+        self.assertNotIn("git apply", script_text.lower())
+        self.assertNotIn("os.system", script_text)
+        self.assertFalse(any(path.is_symlink() for path in PLUGIN_ROOT.rglob("*")))
+        self.assertFalse(any(path.name == ".env" for path in PLUGIN_ROOT.rglob("*")))
 
     def assert_normalized_aggregate_event(self, event_path: Path) -> None:
         self.assertTrue(event_path.is_file(), "expected normalized event fixture")
