@@ -50,6 +50,19 @@ Passed:
 - `PYTHONDONTWRITEBYTECODE=1 python3 -S -m unittest plugins/task-token-cost-analyzer/tests/test_package.py`
 - `git diff --check`
 
+## Fix Round 1
+
+Review findings addressed:
+
+- Added explicit existence assertions for every Task 1 reference document and minimal-task fixture.
+- Expanded the aggregate-only event contract so both `claude-response.json` and `codex-usage.json` are validated for exact normalized fields, forbidden raw fields, and token-total consistency.
+
+Fix-round TDD note:
+
+- The strengthened test surface was added first and run immediately.
+- The first focused run after adding the new assertions passed, so this fix round closed a coverage gap rather than exposing a broken fixture.
+- No fixture content changes were required because the existing Task 1 artifacts already satisfied the stricter contract.
+
 ## Self-review
 
 - Confirmed the package remains optional and offline-safe: no hooks, network calls, marketplace files, or client-specific Codex packaging were added.
@@ -57,6 +70,7 @@ Passed:
 - Confirmed both event fixtures contain only normalized aggregate fields: `client`, `session_id_hash`, `event`, `timestamp`, `model`, `input_tokens`, `output_tokens`, `total_tokens`, and `duration_ms`.
 - Confirmed the fixtures avoid prompt, transcript, raw-body, and secret-like data.
 - Confirmed Task 1 stops at the package contract and evidence fixtures and does not add future-task files such as `SKILL.md`, templates, or the analyzer script.
+- Confirmed the new assertions stay on the Task 1 test surface only and do not broaden scope into later analyzer behavior.
 
 ## Limitations
 

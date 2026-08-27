@@ -15,6 +15,32 @@ FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
 VALIDATOR_SCRIPT = ROOT / "plugins" / "agent-plugin-creator" / "scripts" / "validate_plugin.py"
 REGISTRY_PATH = ROOT / "plugins" / "agent-plugin-creator" / "specs" / "registry.json"
 ANALYZER_SCRIPT = PLUGIN_ROOT / "scripts" / "analyze_task_cost.py"
+REQUIRED_REFERENCE_DOCS = (
+    PLUGIN_ROOT / "skills" / "analyze-task-token-cost" / "references" / "acceptance-matrix.md",
+    PLUGIN_ROOT / "skills" / "analyze-task-token-cost" / "references" / "cost-model.md",
+    PLUGIN_ROOT / "skills" / "analyze-task-token-cost" / "references" / "client-guidance.md",
+)
+REQUIRED_MINIMAL_TASK_FIXTURES = (
+    FIXTURES / "minimal-task" / "plan.md",
+    FIXTURES / "minimal-task" / "progress.md",
+    FIXTURES / "minimal-task" / "task-report.md",
+)
+EVENT_FIXTURES = (
+    FIXTURES / "events" / "claude-response.json",
+    FIXTURES / "events" / "codex-usage.json",
+)
+NORMALIZED_EVENT_FIELDS = {
+    "client",
+    "session_id_hash",
+    "event",
+    "timestamp",
+    "model",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "duration_ms",
+}
+FORBIDDEN_RAW_FIELDS = {"prompt", "transcript", "raw_body"}
 
 
 def load_validator_module() -> types.ModuleType:
@@ -84,35 +110,26 @@ class PackageContractTest(unittest.TestCase):
         self.assertFalse((PLUGIN_ROOT / ".claude-plugin" / "skills").exists())
         self.assertFalse((PLUGIN_ROOT / ".claude-plugin" / "scripts").exists())
         self.assertEqual(ANALYZER_SCRIPT.relative_to(PLUGIN_ROOT).as_posix(), "scripts/analyze_task_cost.py")
+        for path in (*REQUIRED_REFERENCE_DOCS, *REQUIRED_MINIMAL_TASK_FIXTURES):
+            self.assertTrue(path.is_file(), f"expected Task 1 artifact: {path.relative_to(PLUGIN_ROOT)}")
 
     def test_event_fixture_contains_only_normalized_aggregate_fields(self) -> None:
-        event_path = FIXTURES / "events" / "claude-response.json"
+        for event_path in EVENT_FIXTURES:
+            self.assert_normalized_aggregate_event(event_path)
+
+    def assert_normalized_aggregate_event(self, event_path: Path) -> None:
         self.assertTrue(event_path.is_file(), "expected normalized event fixture")
         event = json.loads(event_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(
-            set(event),
-            {
-                "client",
-                "session_id_hash",
-                "event",
-                "timestamp",
-                "model",
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
-                "duration_ms",
-            },
-        )
+        self.assertEqual(set(event), NORMALIZED_EVENT_FIELDS)
         self.assertIn(event["event"], {"api_response", "compaction", "stop"})
         self.assertIsInstance(event["input_tokens"], int)
         self.assertIsInstance(event["output_tokens"], int)
         self.assertIsInstance(event["total_tokens"], int)
         self.assertIsInstance(event["duration_ms"], int)
         self.assertEqual(event["input_tokens"] + event["output_tokens"], event["total_tokens"])
-        self.assertNotIn("prompt", event)
-        self.assertNotIn("transcript", event)
-        self.assertNotIn("raw_body", event)
+        for field in FORBIDDEN_RAW_FIELDS:
+            self.assertNotIn(field, event)
 
 
 if __name__ == "__main__":
