@@ -16,12 +16,14 @@ Closed the remaining validator parity gaps in the allowed write set only.
   `http` adapters after normalization, while still accepting ordinary literal
   header values and keeping the existing secret scanning behavior intact.
 - The standard-library skill frontmatter fallback now mirrors PyYAML for
-  unquoted YAML date scalars such as `2026-08-27` and sexagesimal time-like
-  scalars such as `12:34`, so fields that must remain strings are rejected
-  consistently under both `python3` and `python3 -S`.
+  unquoted YAML date scalars such as `2026-08-27`, sexagesimal time-like
+  scalars such as `12:34`, and full timestamps such as
+  `2026-08-27T12:34:56Z` or `2026-08-27 12:34:56+02:00`, so fields that must
+  remain strings are rejected consistently under both `python3` and
+  `python3 -S`.
 - Regression coverage now proves that quoted date/time strings and block
-  scalars remain valid, while unquoted date/time scalars are rejected and the
-  creator package still validates cleanly.
+  scalars remain valid, while unquoted date/time/timestamp scalars are rejected
+  and the creator package still validates cleanly.
 - The package README now tells plugin authors to keep committed remote header
   values literal and move runtime auth injection outside manifest files.
 
@@ -87,6 +89,8 @@ Result:
 - Limited the fallback scalar typing changes to unquoted plain scalars, so
   quoted strings and block scalar content continue down their existing string
   paths without new coercion.
+- Recognized only YAML full timestamp forms that can be parsed by the standard
+  library, normalizing `Z` to UTC and preserving numeric timezone offsets.
 - Added the header placeholder rule after the existing HTTP control-character
   check so invalid control characters still receive the more specific
   transport diagnostic first.

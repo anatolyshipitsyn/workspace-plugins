@@ -45,6 +45,10 @@ SECRET_NAME_PATTERN = re.compile(
 HTTP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 ENVIRONMENT_PLACEHOLDER_PATTERN = re.compile(r"\$\{[^}]+\}")
 YAML_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+YAML_TIMESTAMP_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt ]\d{1,2}:\d{2}:\d{2}"
+    r"(?:\.\d*)?(?:[ \t]*(?:Z|[-+]\d{1,2}(?::?\d{2})?))?$"
+)
 YAML_SEXAGESIMAL_PATTERN = re.compile(r"^[-+]?[0-9][0-9_]*(?::[0-9][0-9_]*)+$")
 
 
@@ -402,6 +406,12 @@ def parse_simple_scalar(value: str) -> Any:
         return int(value.replace("_", ""))
     if YAML_DATE_PATTERN.fullmatch(value):
         return datetime.date.fromisoformat(value)
+    if YAML_TIMESTAMP_PATTERN.fullmatch(value):
+        timestamp = value.replace(" ", "T", 1).replace("Z", "+00:00")
+        try:
+            return datetime.datetime.fromisoformat(timestamp)
+        except ValueError:
+            pass
     if YAML_SEXAGESIMAL_PATTERN.fullmatch(value):
         sign = -1 if value.startswith("-") else 1
         components = value.lstrip("+-").split(":")

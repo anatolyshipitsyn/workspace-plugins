@@ -736,6 +736,24 @@ class ValidatePluginTest(unittest.TestCase):
                     None,
                 ),
                 (
+                    "timestamp-description",
+                    [
+                        "name: review-skill",
+                        "description: 2026-08-27T12:34:56Z",
+                    ],
+                    1,
+                    "description",
+                ),
+                (
+                    "timestamp-with-timezone-description",
+                    [
+                        "name: review-skill",
+                        "description: 2026-08-27 12:34:56+02:00",
+                    ],
+                    1,
+                    "description",
+                ),
+                (
                     "block-scalar-description",
                     [
                         "name: review-skill",
