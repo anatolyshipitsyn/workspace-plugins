@@ -185,7 +185,15 @@ Run: `PYTHONDONTWRITEBYTECODE=1 python3 -S -m unittest plugins/task-token-cost-a
 
 Expected: PASS with identical semantic results.
 
-- [ ] **Step 5: Commit analyzer implementation**
+- [ ] **Step 5: Run the initial local adversarial audit before behavioral review**
+
+Exercise malformed JSON, missing or duplicate evidence, inconsistent token
+totals, secret-like fields, unsafe output paths, and unknown client records.
+Record the commands and outcomes in the task report and SDD ledger. Batch
+same-surface validator fixes into one fix round before dispatching the first
+independent behavioral review.
+
+- [ ] **Step 6: Commit analyzer implementation**
 
 ```bash
 git add plugins/task-token-cost-analyzer/scripts/analyze_task_cost.py \
