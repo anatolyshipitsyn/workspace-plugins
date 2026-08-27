@@ -354,10 +354,6 @@ def parse_simple_frontmatter(frontmatter_text: str) -> dict[str, Any]:
             nested, index = consume_indented_block(lines, index)
             parsed_value: Any = parse_simple_block_scalar(nested, value)
         elif value.startswith(("[", "{")):
-            if value.startswith("[") and not value.endswith("]"):
-                raise ValidationFailure("Skill frontmatter contains an unterminated flow sequence.")
-            if value.startswith("{") and not value.endswith("}"):
-                raise ValidationFailure("Skill frontmatter contains an unterminated flow mapping.")
             parsed_value = parse_simple_flow_value(value)
         elif not value:
             nested, index = consume_indented_block(lines, index)
@@ -449,10 +445,14 @@ def parse_simple_scalar(value: str) -> Any:
 
 
 def parse_simple_flow_value(value: str) -> Any:
-    if value.startswith("[") and value.endswith("]"):
+    if value.startswith("["):
+        if not value.endswith("]"):
+            raise ValidationFailure("Skill frontmatter contains an unterminated flow sequence.")
         inner = value[1:-1].strip()
         return [] if not inner else [parse_simple_flow_value(item) if item[:1] in "[{" else parse_simple_scalar(item) for item in split_simple_flow_items(inner)]
-    if value.startswith("{") and value.endswith("}"):
+    if value.startswith("{"):
+        if not value.endswith("}"):
+            raise ValidationFailure("Skill frontmatter contains an unterminated flow mapping.")
         inner = value[1:-1].strip()
         result: dict[Any, Any] = {}
         if not inner:

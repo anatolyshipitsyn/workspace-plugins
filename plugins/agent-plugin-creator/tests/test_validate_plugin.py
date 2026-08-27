@@ -967,6 +967,27 @@ class ValidatePluginTest(unittest.TestCase):
                     self.assertNotIn("traceback", result.stdout.lower())
                     self.assertEqual(result.stderr, "")
 
+    def test_rejects_nested_malformed_flow_frontmatter_in_both_parser_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            skill_md = plugin_root / "skills" / "review-skill" / "SKILL.md"
+            skill_md.write_text(
+                "---\n"
+                "name: review-skill\n"
+                "description: Review files\n"
+                "metadata: {author: [unterminated}\n"
+                "---\n\nInstructions.\n",
+                encoding="utf-8",
+            )
+
+            for isolated in (False, True):
+                with self.subTest(isolated=isolated):
+                    result = run_validate(plugin_root, isolated=isolated)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("invalid skill frontmatter", result.stdout.lower())
+                    self.assertNotIn("traceback", result.stdout.lower())
+                    self.assertEqual(result.stderr, "")
+
     def test_rejects_current_skill_frontmatter_rule_violations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(temp_dir)
