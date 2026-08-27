@@ -1,0 +1,27 @@
+{
+  "latestRelease": "1.0.0",
+  "supportedReleases": [
+    "1.0.0"
+  ],
+  "draftReleases": [
+    "1.1.0"
+  ],
+  "sources": {
+    "repository": "https://github.com/agentplugins/agent-plugins-spec",
+    "status": "https://raw.githubusercontent.com/agentplugins/agent-plugins-spec/main/README.md",
+    "releases": {
+      "1.0.0": {
+        "spec": "https://raw.githubusercontent.com/agentplugins/agent-plugins-spec/main/spec/1.0.0.md",
+        "pluginSchemaId": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "mcpSchemaId": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+        "pluginSchema": "https://raw.githubusercontent.com/agentplugins/agent-plugins-spec/main/schemas/1.0.0/plugin.schema.json",
+        "mcpSchema": "https://raw.githubusercontent.com/agentplugins/agent-plugins-spec/main/schemas/1.0.0/mcp.schema.json",
+        "status": "published"
+      },
+      "1.1.0": {
+        "spec": "https://raw.githubusercontent.com/agentplugins/agent-plugins-spec/main/spec/1.1.0.md",
+        "status": "working-draft"
+      }
+    }
+  }
+}

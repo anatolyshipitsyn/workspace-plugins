@@ -1,0 +1,469 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import re
+import sys
+from typing import Any
+from urllib.parse import urlparse
+
+
+SCRIPT_PATH = Path(__file__).resolve()
+PLUGIN_ROOT = SCRIPT_PATH.parents[1]
+SPECS_ROOT = PLUGIN_ROOT / "specs"
+REGISTRY_PATH = SPECS_ROOT / "registry.json"
+CLAUDE_PLUGIN_DATA = "${CLAUDE_PLUGIN_DATA}"
+CLAUDE_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}"
+SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+SKILL_NAME_MAX_LENGTH = 64
+
+
+class ScaffoldError(Exception):
+    pass
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--destination", required=True)
+    parser.add_argument("--name", required=True)
+    parser.add_argument("--description", required=True)
+    parser.add_argument("--clients", required=True)
+    parser.add_argument("--with-skill", action="append", default=[])
+    parser.add_argument("--with-mcp-server", action="append", default=[])
+    parser.add_argument("--license")
+    parser.add_argument("--author-name")
+    parser.add_argument("--author-email")
+    parser.add_argument("--author-url")
+    parser.add_argument("--force", action="store_true")
+    return parser.parse_args()
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def normalize_name(raw_name: str) -> str:
+    lowered = raw_name.strip().lower()
+    normalized = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
+    normalized = re.sub(r"-{2,}", "-", normalized)
+    if not normalized:
+        raise ScaffoldError("Plugin name is empty after normalization.")
+    return normalized
+
+
+def load_release_metadata() -> tuple[str, str, str]:
+    registry = read_json(REGISTRY_PATH)
+    latest_release = registry.get("latestRelease")
+    supported_releases = registry.get("supportedReleases", [])
+    draft_releases = registry.get("draftReleases", [])
+    release_sources = registry.get("sources", {}).get("releases", {})
+
+    if not isinstance(latest_release, str):
+        raise ScaffoldError("Latest release is missing from the local registry.")
+    if latest_release not in supported_releases:
+        raise ScaffoldError(
+            f"Latest release {latest_release!r} is not supported by the local registry."
+        )
+    if latest_release in draft_releases:
+        raise ScaffoldError(
+            f"Latest release {latest_release!r} is a draft and cannot be scaffolded."
+        )
+
+    release_dir = SPECS_ROOT / latest_release
+    plugin_schema_path = release_dir / "plugin.schema.json"
+    mcp_schema_path = release_dir / "mcp.schema.json"
+    if not plugin_schema_path.is_file() or not mcp_schema_path.is_file():
+        raise ScaffoldError(
+            f"Latest release {latest_release!r} is missing local schema files."
+        )
+
+    release_source = release_sources.get(latest_release)
+    if not isinstance(release_source, dict):
+        raise ScaffoldError(
+            f"Latest release {latest_release!r} is missing source metadata in the local registry."
+        )
+
+    plugin_schema_url = release_source.get("pluginSchemaId")
+    mcp_schema_url = release_source.get("mcpSchemaId")
+    if not isinstance(plugin_schema_url, str) or not isinstance(mcp_schema_url, str):
+        raise ScaffoldError(
+            f"Latest release {latest_release!r} is missing canonical schema URLs."
+        )
+
+    return latest_release, plugin_schema_url, mcp_schema_url
+
+
+def load_plugin_name_constraints(release: str) -> tuple[int, int, re.Pattern[str]]:
+    schema = read_json(SPECS_ROOT / release / "plugin.schema.json")
+    name_schema = schema.get("properties", {}).get("name", {})
+    pattern = name_schema.get("pattern")
+    min_length = name_schema.get("minLength")
+    max_length = name_schema.get("maxLength")
+    if (
+        not isinstance(pattern, str)
+        or not isinstance(min_length, int)
+        or not isinstance(max_length, int)
+    ):
+        raise ScaffoldError(f"Release {release!r} does not define complete name constraints.")
+    return min_length, max_length, re.compile(pattern)
+
+
+def parse_clients(raw_clients: str) -> list[str]:
+    clients: list[str] = []
+    seen: set[str] = set()
+    for part in raw_clients.split(","):
+        client = part.strip().lower()
+        if not client:
+            continue
+        if client not in {"codex", "claude"}:
+            raise ScaffoldError(f"Unsupported client {client!r}.")
+        if client not in seen:
+            clients.append(client)
+            seen.add(client)
+    if not clients:
+        raise ScaffoldError("At least one client must be selected.")
+    return clients
+
+
+def parse_skill_names(raw_skills: list[str]) -> list[str]:
+    skills: list[str] = []
+    seen: set[str] = set()
+    for raw_skill in raw_skills:
+        skill_name = normalize_name(raw_skill)
+        validate_skill_name(skill_name)
+        if skill_name not in seen:
+            skills.append(skill_name)
+            seen.add(skill_name)
+    return skills
+
+
+def validate_skill_name(skill_name: str) -> None:
+    if len(skill_name) > SKILL_NAME_MAX_LENGTH or SKILL_NAME_PATTERN.fullmatch(skill_name) is None:
+        raise ScaffoldError(
+            "Skill names must be 1-64 characters of lowercase letters, digits, and single internal hyphens only."
+        )
+
+
+def parse_mcp_servers(raw_servers: list[str]) -> dict[str, dict[str, Any]]:
+    servers: dict[str, dict[str, Any]] = {}
+    for raw_server in raw_servers:
+        try:
+            payload = json.loads(raw_server)
+        except json.JSONDecodeError as exc:
+            raise ScaffoldError(f"Invalid MCP server JSON: {exc.msg}.") from exc
+        if not isinstance(payload, dict):
+            raise ScaffoldError("Each MCP server payload must be a JSON object.")
+
+        name = payload.get("name")
+        config = payload.get("config")
+        if not isinstance(name, str) or not name.strip():
+            raise ScaffoldError("Each MCP server payload must include a non-empty name.")
+        if not isinstance(config, dict):
+            raise ScaffoldError(
+                f"MCP server {name!r} must include a JSON object in the config field."
+            )
+        if "type" not in config:
+            raise ScaffoldError(f"MCP server {name!r} must include a type field.")
+
+        servers[name] = dict(config)
+    return servers
+
+
+def parse_optional_text(field_name: str, raw_value: str | None) -> str | None:
+    if raw_value is None:
+        return None
+
+    value = raw_value.strip()
+    if not value:
+        raise ScaffoldError(f"{field_name} cannot be empty when provided.")
+    return value
+
+
+def validate_author_email(email: str) -> str:
+    if "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise ScaffoldError("Author email must be a valid email address.")
+    local_part, _, domain = email.rpartition("@")
+    if not local_part or "." not in domain or domain.startswith(".") or domain.endswith("."):
+        raise ScaffoldError("Author email must be a valid email address.")
+    return email
+
+
+def validate_author_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ScaffoldError("Author URL must be an absolute http or https URL.")
+    return url
+
+
+def build_optional_manifest_metadata(
+    *,
+    license_name: str | None,
+    author_name: str | None,
+    author_email: str | None,
+    author_url: str | None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+
+    normalized_license = parse_optional_text("License", license_name)
+    if normalized_license is not None:
+        metadata["license"] = normalized_license
+
+    author: dict[str, str] = {}
+
+    normalized_author_name = parse_optional_text("Author name", author_name)
+    if normalized_author_name is not None:
+        author["name"] = normalized_author_name
+
+    normalized_author_email = parse_optional_text("Author email", author_email)
+    if normalized_author_email is not None:
+        author["email"] = validate_author_email(normalized_author_email)
+
+    normalized_author_url = parse_optional_text("Author URL", author_url)
+    if normalized_author_url is not None:
+        author["url"] = validate_author_url(normalized_author_url)
+
+    if author:
+        metadata["author"] = author
+
+    return metadata
+
+
+def ensure_destination(destination: Path) -> Path:
+    requested_destination = destination.expanduser()
+    current = requested_destination
+    while not current.exists() and current != current.parent:
+        current = current.parent
+
+    probe = current
+    while True:
+        if probe.is_symlink():
+            raise ScaffoldError(
+                "Destination resolves outside the requested destination path."
+            )
+        if probe == requested_destination:
+            break
+        next_probe = probe / requested_destination.relative_to(probe).parts[0]
+        if next_probe == probe:
+            break
+        probe = next_probe
+
+    resolved_destination = requested_destination.resolve()
+
+    if resolved_destination.exists():
+        if not resolved_destination.is_dir():
+            raise ScaffoldError("Destination must be an existing directory or a new directory path.")
+    else:
+        resolved_destination.mkdir(parents=True, exist_ok=True)
+    return resolved_destination
+
+
+def validate_output_path(destination: Path, plugin_name: str) -> Path:
+    output_path = (destination / plugin_name).resolve()
+    try:
+        output_path.relative_to(destination)
+    except ValueError as exc:
+        raise ScaffoldError("Resolved output path escapes the destination directory.") from exc
+    return output_path
+
+
+def translate_for_claude(value: Any) -> Any:
+    if isinstance(value, str):
+        return (
+            value.replace("${PLUGIN_ROOT}", CLAUDE_PLUGIN_ROOT)
+            .replace("${PLUGIN_DATA}", CLAUDE_PLUGIN_DATA)
+        )
+    if isinstance(value, list):
+        return [translate_for_claude(item) for item in value]
+    if isinstance(value, dict):
+        return {key: translate_for_claude(item) for key, item in value.items()}
+    return value
+
+
+def translate_mcp_server_for_claude(server_config: dict[str, Any]) -> dict[str, Any]:
+    translated = {
+        key: translate_for_claude(value) for key, value in server_config.items()
+    }
+    if translated.get("type") == "streamable-http":
+        translated["type"] = "http"
+    return translated
+
+
+def render_json(path: Path, data: dict[str, Any], *, force: bool, plugin_root: Path) -> None:
+    resolved_path = path.resolve(strict=False)
+    try:
+        resolved_path.relative_to(plugin_root)
+    except ValueError as exc:
+        raise ScaffoldError("Refusing to write outside the generated plugin directory.") from exc
+
+    if path.exists() and path.is_dir():
+        raise ScaffoldError(f"Refusing to overwrite directory {path}.")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "w" if force else "x"
+    with path.open(mode, encoding="utf-8", newline="\n") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+
+
+def render_text(path: Path, content: str, *, force: bool, plugin_root: Path) -> None:
+    resolved_path = path.resolve(strict=False)
+    try:
+        resolved_path.relative_to(plugin_root)
+    except ValueError as exc:
+        raise ScaffoldError("Refusing to write outside the generated plugin directory.") from exc
+
+    if path.exists() and path.is_dir():
+        raise ScaffoldError(f"Refusing to overwrite directory {path}.")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "w" if force else "x"
+    with path.open(mode, encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
+
+
+def build_skill_placeholder(skill_name: str) -> str:
+    return "\n".join(
+        [
+            "---",
+            f'name: "{skill_name}"',
+            f'description: "Instructions for {skill_name}"',
+            "---",
+            "",
+            f"Replace this placeholder with real instructions for `{skill_name}`.",
+            "",
+        ]
+    )
+
+
+def scaffold_plugin(
+    destination: Path,
+    name: str,
+    description: str,
+    clients: list[str],
+    skills: list[str],
+    mcp_servers: dict[str, dict[str, Any]],
+    license_name: str | None = None,
+    author_name: str | None = None,
+    author_email: str | None = None,
+    author_url: str | None = None,
+    *,
+    force: bool,
+) -> Path:
+    latest_release, plugin_schema_url, mcp_schema_url = load_release_metadata()
+    min_name_length, max_name_length, name_pattern = load_plugin_name_constraints(latest_release)
+    normalized_name = normalize_name(name)
+    if len(normalized_name) < min_name_length or len(normalized_name) > max_name_length:
+        raise ScaffoldError(
+            f"Normalized plugin name {normalized_name!r} must be between {min_name_length} and {max_name_length} characters."
+        )
+    if not name_pattern.fullmatch(normalized_name):
+        raise ScaffoldError(
+            f"Normalized plugin name {normalized_name!r} does not satisfy the latest release constraints."
+        )
+
+    manifest_metadata = build_optional_manifest_metadata(
+        license_name=license_name,
+        author_name=author_name,
+        author_email=author_email,
+        author_url=author_url,
+    )
+
+    destination_root = ensure_destination(destination)
+    plugin_root = validate_output_path(destination_root, normalized_name)
+    if plugin_root.exists() and not force:
+        raise ScaffoldError(f"Refusing to overwrite existing output directory {plugin_root}.")
+    plugin_root.mkdir(parents=True, exist_ok=True)
+
+    render_json(
+        plugin_root / "plugin.json",
+        {
+            "$schema": plugin_schema_url,
+            "name": normalized_name,
+            "version": "0.1.0",
+            "description": description,
+            "keywords": ["agent-plugin"],
+            **manifest_metadata,
+        },
+        force=force,
+        plugin_root=plugin_root,
+    )
+
+    for skill_name in skills:
+        render_text(
+            plugin_root / "skills" / skill_name / "SKILL.md",
+            build_skill_placeholder(skill_name),
+            force=force,
+            plugin_root=plugin_root,
+        )
+
+    if "claude" in clients:
+        render_json(
+            plugin_root / ".claude-plugin" / "plugin.json",
+            {
+                "name": normalized_name,
+                "version": "0.1.0",
+                "description": description,
+            },
+            force=force,
+            plugin_root=plugin_root,
+        )
+
+    if mcp_servers:
+        portable_mcp = {
+            "$schema": mcp_schema_url,
+            "mcpServers": mcp_servers,
+        }
+        render_json(
+            plugin_root / "mcp.json",
+            portable_mcp,
+            force=force,
+            plugin_root=plugin_root,
+        )
+        if "claude" in clients:
+            claude_mcp = {
+                "$schema": mcp_schema_url,
+                "mcpServers": {
+                    name: translate_mcp_server_for_claude(server_config)
+                    for name, server_config in mcp_servers.items()
+                },
+            }
+            render_json(
+                plugin_root / ".mcp.json",
+                claude_mcp,
+                force=force,
+                plugin_root=plugin_root,
+            )
+
+    return plugin_root
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        clients = parse_clients(args.clients)
+        skills = parse_skill_names(args.with_skill)
+        mcp_servers = parse_mcp_servers(args.with_mcp_server)
+        scaffold_plugin(
+            Path(args.destination),
+            args.name,
+            args.description,
+            clients,
+            skills,
+            mcp_servers,
+            license_name=args.license,
+            author_name=args.author_name,
+            author_email=args.author_email,
+            author_url=args.author_url,
+            force=args.force,
+        )
+    except (ScaffoldError, FileExistsError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
