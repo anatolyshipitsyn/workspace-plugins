@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-26-agent-plugin-creator-design.md`; upstream Agent Plugins Specification repository and its published schemas.
 
+**Status:** Complete on branch `codex/agent-plugin-creator`. Implementation,
+scoped reviews, final whole-branch review, and verification are recorded in
+the SDD ledger at `.superpowers/sdd/2026-08-26-agent-plugin-creator/progress.md`.
+
 ## Global Constraints
 
 - The generator MUST select `latestRelease` from a local registry and MUST NOT expose `--spec-version`.
