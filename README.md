@@ -62,7 +62,9 @@ claude plugin marketplace add anatolyshipitsyn/workspace-plugins
 claude plugin install agent-plugin-creator@workspace-plugins
 ```
 
-To work against a local checkout instead, pass its path:
+`claude plugin marketplace add` has no `--ref`, so a GitHub source always
+tracks the repository's default branch (`main`). To work against a local
+checkout or another branch, pass a path instead:
 
 ```bash
 claude plugin marketplace add /path/to/workspace-plugins
@@ -173,16 +175,25 @@ codex plugin add agent-plugin-creator@workspace-plugins
 ```
 
 Either form writes a `[marketplaces.workspace-plugins]` entry plus a
-per-plugin enable flag to `~/.codex/config.toml`. For a local path that entry
-is:
+per-plugin enable flag to `~/.codex/config.toml`. A GitHub source records the
+resolved URL and ref:
+
+```toml
+[marketplaces.workspace-plugins]
+source_type = "git"
+source = "https://github.com/anatolyshipitsyn/workspace-plugins.git"
+ref = "main"
+
+[plugins."agent-plugin-creator@workspace-plugins"]
+enabled = true
+```
+
+A local path source records the path instead:
 
 ```toml
 [marketplaces.workspace-plugins]
 source_type = "local"
 source = "/path/to/workspace-plugins"
-
-[plugins."agent-plugin-creator@workspace-plugins"]
-enabled = true
 ```
 
 Remove the workspace with:
