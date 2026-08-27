@@ -322,7 +322,10 @@ def extract_frontmatter_document(skill_path: Path) -> tuple[dict[str, Any], str]
     except ImportError:
         frontmatter = parse_simple_frontmatter(frontmatter_text)
     else:
-        frontmatter = yaml.safe_load(frontmatter_text)
+        try:
+            frontmatter = yaml.safe_load(frontmatter_text)
+        except yaml.YAMLError as exc:
+            raise ValidationFailure(f"YAML parser error: {exc}") from exc
 
     if not isinstance(frontmatter, dict):
         raise ValidationFailure("Skill frontmatter must decode to a mapping.")
@@ -350,7 +353,11 @@ def parse_simple_frontmatter(frontmatter_text: str) -> dict[str, Any]:
         if value in {"|", ">"}:
             nested, index = consume_indented_block(lines, index)
             parsed_value: Any = parse_simple_block_scalar(nested, value)
-        elif value.startswith("[") or value.startswith("{"):
+        elif value.startswith(("[", "{")):
+            if value.startswith("[") and not value.endswith("]"):
+                raise ValidationFailure("Skill frontmatter contains an unterminated flow sequence.")
+            if value.startswith("{") and not value.endswith("}"):
+                raise ValidationFailure("Skill frontmatter contains an unterminated flow mapping.")
             parsed_value = parse_simple_flow_value(value)
         elif not value:
             nested, index = consume_indented_block(lines, index)
