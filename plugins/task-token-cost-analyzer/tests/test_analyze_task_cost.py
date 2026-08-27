@@ -57,6 +57,16 @@ def run_cli(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def write_json(path: Path, payload: object) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def write_jsonl(path: Path, records: list[object]) -> Path:
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+    return path
+
+
 class AnalyzerCoreTests(unittest.TestCase):
     maxDiff = None
 
@@ -70,6 +80,113 @@ class AnalyzerCoreTests(unittest.TestCase):
         self.assertEqual(result.measured["output_tokens"], 1200)
         self.assertEqual(result.evidence["token_counts"], "measured")
         self.assertEqual(result.evidence["durations"], "measured")
+
+    def test_load_events_maps_claude_hook_and_codex_export_from_json_array(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            events_path = write_json(
+                Path(temp_dir) / "events.json",
+                [
+                    {
+                        "hook_event_name": "Stop",
+                        "session_id": "claude-hook-session-001",
+                        "timestamp": "2026-08-27T09:00:00Z",
+                        "model": "claude-sonnet-4",
+                        "usage": {"input_tokens": 700, "output_tokens": 300},
+                        "duration_ms": 1110,
+                        "prompt": "secret-prompt",
+                        "raw_body": {"api_key": "secret-value"},
+                    },
+                    {
+                        "exported_from": "codex",
+                        "event_type": "response.completed",
+                        "session_id": "codex-export-session-001",
+                        "created_at": "2026-08-27T09:01:00Z",
+                        "model_slug": "gpt-5-codex",
+                        "usage": {"prompt_tokens": 1000, "completion_tokens": 400, "total_tokens": 1400},
+                        "duration_ms": 900,
+                        "transcript": "secret-transcript",
+                    },
+                ],
+            )
+
+            events = analyzer.load_events(events_path)
+
+        self.assertEqual(
+            events,
+            [
+                {
+                    "client": "claude",
+                    "session_id_hash": "claude-hook-session-001",
+                    "event": "stop",
+                    "timestamp": "2026-08-27T09:00:00Z",
+                    "model": "claude-sonnet-4",
+                    "input_tokens": 700,
+                    "output_tokens": 300,
+                    "total_tokens": 1000,
+                    "duration_ms": 1110,
+                },
+                {
+                    "client": "codex",
+                    "session_id_hash": "codex-export-session-001",
+                    "event": "api_response",
+                    "timestamp": "2026-08-27T09:01:00Z",
+                    "model": "gpt-5-codex",
+                    "input_tokens": 1000,
+                    "output_tokens": 400,
+                    "total_tokens": 1400,
+                    "duration_ms": 900,
+                },
+            ],
+        )
+
+    def test_load_events_maps_claude_otel_jsonl_and_discards_raw_fields(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            events_path = write_jsonl(
+                Path(temp_dir) / "events.jsonl",
+                [
+                    {
+                        "otel_scope": "claude",
+                        "attributes": {
+                            "event.name": "PostToolUse",
+                            "session.id": "claude-otel-session-001",
+                            "gen_ai.response.model": "claude-sonnet-4",
+                            "gen_ai.usage.input_tokens": 400,
+                            "gen_ai.usage.output_tokens": 100,
+                            "gen_ai.latency.ms": 320,
+                        },
+                        "timestamp": "2026-08-27T09:02:00Z",
+                        "prompt": "secret-prompt",
+                        "transcript": "secret-transcript",
+                    },
+                    {
+                        "otel_scope": "claude",
+                        "attributes": {
+                            "event.name": "Stop",
+                            "session.id": "claude-otel-session-002",
+                            "gen_ai.response.model": "claude-sonnet-4",
+                            "gen_ai.usage.input_tokens": 200,
+                            "gen_ai.usage.output_tokens": 50,
+                            "gen_ai.latency.ms": 180,
+                        },
+                        "timestamp": "2026-08-27T09:03:00Z",
+                        "raw_body": {"authorization": "Bearer secret-value"},
+                    },
+                ],
+            )
+
+            events = analyzer.load_events(events_path)
+
+        self.assertEqual([event["event"] for event in events], ["api_response", "stop"])
+        self.assertEqual([event["total_tokens"] for event in events], [500, 250])
+        self.assertTrue(all(set(event) == set(analyzer.NORMALIZED_EVENT_FIELDS) for event in events))
+        serialized = json.dumps(events, sort_keys=True)
+        self.assertNotIn("secret-prompt", serialized)
+        self.assertNotIn("secret-transcript", serialized)
+        self.assertNotIn("secret-value", serialized)
 
     def test_marks_missing_tokens_as_estimated_or_missing(self) -> None:
         analyzer = load_analyzer(self)
@@ -100,6 +217,34 @@ class AnalyzerCoreTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "outside"):
             analyzer.analyze_task(MINIMAL_TASK_ROOT, EVENTS / "codex-usage.json")
+
+    def test_cli_resolves_root_relative_events_path(self) -> None:
+        self.assertTrue(SCRIPT_PATH.is_file(), f"missing analyzer script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "plan.md").write_text("# Plan\n", encoding="utf-8")
+            events_path = write_jsonl(
+                root / "events.jsonl",
+                [
+                    {
+                        "exported_from": "codex",
+                        "event_type": "stop",
+                        "session_id": "codex-export-session-002",
+                        "created_at": "2026-08-27T09:05:00Z",
+                        "model_slug": "gpt-5-codex",
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140},
+                        "duration_ms": 120,
+                    }
+                ],
+            )
+
+            completed = run_cli(root, "--events", events_path.name)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["measured"]["total_tokens"], 140)
+        self.assertEqual(payload["evidence"]["token_counts"], "measured")
 
     def test_rejects_malformed_and_negative_event_data_without_echoing_payload(self) -> None:
         self.assertTrue(SCRIPT_PATH.is_file(), f"missing analyzer script: {SCRIPT_PATH}")

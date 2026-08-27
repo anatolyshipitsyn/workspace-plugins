@@ -34,6 +34,15 @@ FORBIDDEN_EVENT_FIELDS = {
     "token",
     "password",
 }
+IGNORED_EXPORT_FIELDS = {
+    "prompt",
+    "transcript",
+    "raw_body",
+    "raw-body",
+    "request_body",
+    "response_body",
+    "headers",
+}
 ALLOWED_CLIENTS = {"claude", "codex"}
 EVENT_CLASSES = {"api_response", "compaction", "stop"}
 TEXT_SUFFIXES = {".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"}
@@ -42,6 +51,7 @@ SECRET_PATTERNS = (
     re.compile(r"(?i)\b(api[_-]?key|token|secret|password|passwd)\b(\s*[:=]\s*)([^\s,;]+)"),
     re.compile(r"\b(sk|ghp|gho|ghu|xoxb|xoxp)-[A-Za-z0-9._-]+\b"),
 )
+SECRET_KEY_PATTERN = re.compile(r"(?i)(^token$|access[_-]?token|auth[_-]?token|api[_-]?key|secret|password|passwd|authorization)")
 
 
 @dataclass(frozen=True)
@@ -122,7 +132,8 @@ def resolve_root(root: Path) -> Path:
 
 
 def resolve_within(root: Path, path: Path) -> Path:
-    resolved = path.expanduser().resolve()
+    candidate = path if path.is_absolute() else root / path
+    resolved = candidate.expanduser().resolve()
     if not is_relative_to(resolved, root):
         raise ValueError(f"Path is outside the requested root: {path}")
     return resolved
@@ -186,7 +197,7 @@ def load_events(path: Path) -> list[dict[str, object]]:
 
     text = resolved.read_text(encoding="utf-8")
     raw_events = parse_event_payload(text)
-    events = [normalize_event(item) for item in raw_events]
+    events = [normalize_event_record(item) for item in raw_events]
     return events
 
 
@@ -254,6 +265,223 @@ def normalize_event(record: object) -> dict[str, object]:
         raise ValueError("Event record has inconsistent token totals")
 
     return normalized
+
+
+def normalize_event_record(record: object) -> dict[str, object]:
+    if not isinstance(record, dict):
+        raise ValueError("Event records must be JSON objects")
+
+    mapped = map_supported_event(record)
+    if mapped is not None:
+        return normalize_event(mapped)
+
+    return normalize_event(record)
+
+
+def map_supported_event(record: dict[str, object]) -> dict[str, object] | None:
+    if set(NORMALIZED_EVENT_FIELDS).issubset(record):
+        return None
+
+    mapped = map_claude_hook_event(record)
+    if mapped is not None:
+        return mapped
+
+    mapped = map_claude_otel_event(record)
+    if mapped is not None:
+        return mapped
+
+    mapped = map_codex_export_event(record)
+    if mapped is not None:
+        return mapped
+
+    return None
+
+
+def map_claude_hook_event(record: dict[str, object]) -> dict[str, object] | None:
+    if "hook_event_name" not in record or "usage" not in record or "session_id" not in record:
+        return None
+
+    ensure_no_secret_fields(record)
+    usage = require_mapping(record.get("usage"), "Claude hook usage")
+
+    input_tokens = read_int(usage, "input_tokens")
+    output_tokens = read_int(usage, "output_tokens")
+    total_tokens = read_total_tokens(usage, input_tokens, output_tokens)
+
+    return {
+        "client": "claude",
+        "session_id_hash": read_str(record, "session_id"),
+        "event": normalize_export_event(record.get("hook_event_name")),
+        "timestamp": read_str(record, "timestamp"),
+        "model": read_model_name(record.get("model")),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "duration_ms": read_optional_int(record, "duration_ms", default=0),
+    }
+
+
+def map_claude_otel_event(record: dict[str, object]) -> dict[str, object] | None:
+    attributes = record.get("attributes")
+    if not isinstance(attributes, dict) or "gen_ai.usage.input_tokens" not in attributes:
+        return None
+
+    ensure_no_secret_fields(record)
+
+    input_tokens = read_int(attributes, "gen_ai.usage.input_tokens")
+    output_tokens = read_int(attributes, "gen_ai.usage.output_tokens")
+    total_tokens = read_total_tokens(attributes, input_tokens, output_tokens, "gen_ai.usage.total_tokens")
+
+    return {
+        "client": "claude",
+        "session_id_hash": read_str(attributes, "session.id"),
+        "event": normalize_export_event(
+            attributes.get("event.name") if "event.name" in attributes else record.get("name")
+        ),
+        "timestamp": read_str(record, "timestamp"),
+        "model": read_model_name(
+            attributes.get("gen_ai.response.model")
+            if "gen_ai.response.model" in attributes
+            else record.get("model")
+        ),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "duration_ms": read_optional_int(
+            attributes,
+            "gen_ai.latency.ms",
+            default=read_optional_int(record, "duration_ms", default=0),
+        ),
+    }
+
+
+def map_codex_export_event(record: dict[str, object]) -> dict[str, object] | None:
+    if "usage" not in record or "event_type" not in record or "session_id" not in record:
+        return None
+
+    ensure_no_secret_fields(record)
+    usage = require_mapping(record.get("usage"), "Codex usage")
+
+    input_tokens = read_first_int(usage, ("prompt_tokens", "input_tokens"))
+    output_tokens = read_first_int(usage, ("completion_tokens", "output_tokens"))
+    total_tokens = read_total_tokens(usage, input_tokens, output_tokens)
+
+    timestamp_source = "created_at" if "created_at" in record else "timestamp"
+    model_source = "model_slug" if "model_slug" in record else "model"
+
+    return {
+        "client": "codex",
+        "session_id_hash": read_str(record, "session_id"),
+        "event": normalize_export_event(record.get("event_type")),
+        "timestamp": read_str(record, timestamp_source),
+        "model": read_model_name(record.get(model_source)),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "duration_ms": read_optional_int(record, "duration_ms", default=0),
+    }
+
+
+def require_mapping(value: object, label: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
+def read_str(record: dict[str, object], field: str) -> str:
+    value = record.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Event record has an invalid {field}")
+    return value
+
+
+def read_model_name(value: object) -> str:
+    if isinstance(value, str) and value.strip():
+        return value
+    if isinstance(value, dict):
+        for field in ("display_name", "name", "id"):
+            nested = value.get(field)
+            if isinstance(nested, str) and nested.strip():
+                return nested
+    raise ValueError("Event record has an invalid model")
+
+
+def read_int(record: dict[str, object], field: str) -> int:
+    if field not in record:
+        raise ValueError(f"Event record is missing required field: {field}")
+    value = record[field]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Event record has a non-numeric {field}")
+    if value < 0:
+        raise ValueError(f"Event record has a negative {field}")
+    return value
+
+
+def read_optional_int(record: dict[str, object], field: str, default: int) -> int:
+    if field not in record:
+        return default
+    return read_int(record, field)
+
+
+def read_first_int(record: dict[str, object], fields: tuple[str, ...]) -> int:
+    for field in fields:
+        if field in record:
+            return read_int(record, field)
+    raise ValueError(f"Event record is missing required field: {fields[0]}")
+
+
+def read_total_tokens(
+    record: dict[str, object],
+    input_tokens: int,
+    output_tokens: int,
+    field: str = "total_tokens",
+) -> int:
+    if field not in record:
+        return input_tokens + output_tokens
+
+    total_tokens = read_int(record, field)
+    if input_tokens + output_tokens != total_tokens:
+        raise ValueError("Event record has inconsistent token totals")
+    return total_tokens
+
+
+def normalize_export_event(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Event record has an unsupported event class")
+
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+    event_map = {
+        "api_response": "api_response",
+        "apiresponse": "api_response",
+        "response_completed": "api_response",
+        "posttooluse": "api_response",
+        "post_tool_use": "api_response",
+        "compaction": "compaction",
+        "subagentstop": "compaction",
+        "subagent_stop": "compaction",
+        "stop": "stop",
+        "session_stop": "stop",
+    }
+    if normalized not in event_map:
+        raise ValueError("Event record has an unsupported event class")
+    return event_map[normalized]
+
+
+def ensure_no_secret_fields(record: object, parent_key: str | None = None) -> None:
+    if isinstance(record, dict):
+        for key, value in record.items():
+            key_name = str(key)
+            lowered = key_name.lower()
+            if lowered in IGNORED_EXPORT_FIELDS:
+                continue
+            if SECRET_KEY_PATTERN.search(lowered):
+                raise ValueError(f"Event data contains forbidden raw fields: {key_name}")
+            ensure_no_secret_fields(value, key_name)
+        return
+
+    if isinstance(record, list):
+        for item in record:
+            ensure_no_secret_fields(item, parent_key)
 
 
 def count_by_class(files: list[EvidenceFile], evidence_class: str) -> int:
