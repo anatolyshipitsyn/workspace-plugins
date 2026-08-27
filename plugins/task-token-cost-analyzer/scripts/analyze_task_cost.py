@@ -46,6 +46,7 @@ IGNORED_EXPORT_FIELDS = {
 ALLOWED_CLIENTS = {"claude", "codex"}
 EVENT_CLASSES = {"api_response", "compaction", "stop"}
 TEXT_SUFFIXES = {".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"}
+CONTRACT_TEXT_SUFFIXES = {".md", ".txt", ".yaml", ".yml"}
 SECRET_PATTERNS = (
     re.compile(r"(?i)\b(authorization\s*:\s*bearer\s+)([^\s]+)"),
     re.compile(r"(?i)\b(api[_-]?key|token|secret|password|passwd)\b(\s*[:=]\s*)([^\s,;]+)"),
@@ -149,6 +150,21 @@ def resolve_within(root: Path, path: Path) -> Path:
     resolved = candidate.expanduser().resolve()
     if not is_relative_to(resolved, root):
         raise ValueError(f"Path is outside the requested root: {path}")
+    return resolved
+
+
+def resolve_event_path(root: Path, path: Path) -> Path:
+    candidate = path.expanduser()
+    if path.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        resolved = (root / candidate).resolve()
+        if not is_relative_to(resolved, root):
+            raise ValueError(f"Path is outside the requested root: {path}")
+    if not resolved.exists():
+        raise ValueError(f"Event path does not exist: {path}")
+    if not resolved.is_file():
+        raise ValueError(f"Event path is not a file: {path}")
     return resolved
 
 
@@ -539,10 +555,63 @@ def collect_secret_observations(root: Path) -> list[dict[str, object]]:
     return observations
 
 
+def collect_acceptance_signals(root: Path, inventory: EvidenceInventory) -> dict[str, bool]:
+    contract_text = read_contract_text(root, inventory)
+    inventory_paths = {item.relative_path.lower() for item in inventory.files}
+    return {
+        "codex_skill_guidance": any(path.startswith("skills/") and path.endswith("/skill.md") for path in inventory_paths)
+        or contains_any(contract_text, ("analyze-task-token-cost", "shared skill", "skill.md")),
+        "codex_bounded_context_guidance": contains_any(
+            contract_text,
+            ("task-only context", "current task brief", "keep context bounded"),
+        ),
+        "codex_worktree_or_sdd_boundary": contains_any(
+            contract_text,
+            ("worktree", "subagent-driven development", "sdd ledger", "/sdd/"),
+        ),
+        "codex_concise_verification_guidance": contains_any(
+            contract_text,
+            ("focused tests", "without `-v`", "without -v", "git diff --check"),
+        ),
+        "codex_telemetry_boundary_guidance": contains_any(
+            contract_text,
+            (
+                "do not install hooks",
+                "optional local inputs",
+                "do not claim a portable codex hook contract",
+                "missing telemetry",
+                "estimated or missing",
+            ),
+        ),
+        "claude_adapter_present": ".claude-plugin/plugin.json" in inventory_paths
+        or contains_any(contract_text, (".claude-plugin/plugin.json", "claude adapter")),
+        "claude_shared_skill_paths": any(path.startswith("skills/") and path.endswith("/skill.md") for path in inventory_paths)
+        and not any(
+            path.startswith(".claude-plugin/skills") or path.startswith(".claude-plugin/scripts")
+            for path in inventory_paths
+        ),
+        "claude_metadata_only_adapter_guidance": contains_any(
+            contract_text,
+            ("metadata only", "shared package files", "do not duplicate skills", "do not duplicate scripts"),
+        ),
+        "claude_offline_workflow_guidance": contains_any(
+            contract_text,
+            ("offline", "local inputs", "optional", "do not install hooks"),
+        ),
+        "yaml_artifacts_present": any(path.endswith((".yaml", ".yml")) for path in inventory_paths),
+        "yaml_frontmatter_handling": contains_any(contract_text, ("frontmatter",)),
+        "yaml_scalar_typing": contains_any(contract_text, ("scalar typing", "scalar behavior")),
+        "yaml_quoted_and_block_scalar_behavior": contains_any(contract_text, ("quoted",))
+        and contains_any(contract_text, ("block scalar",)),
+        "yaml_malformed_input_handling": contains_any(contract_text, ("malformed", "invalid yaml")),
+    }
+
+
 def analyze_task(root: Path, events: Path | None = None) -> AnalysisResult:
     resolved_root = resolve_root(root)
     inventory = collect_evidence(resolved_root)
     secret_observations = collect_secret_observations(resolved_root)
+    acceptance_signals = collect_acceptance_signals(resolved_root, inventory)
 
     measured: dict[str, object] = {}
     derived: dict[str, object] = {
@@ -562,6 +631,7 @@ def analyze_task(root: Path, events: Path | None = None) -> AnalysisResult:
             if item.line_count >= 200 or item.relative_path.endswith((".log", ".jsonl"))
         ),
         "secret_redaction_hits": len(secret_observations),
+        "acceptance_signals": acceptance_signals,
     }
     estimated: dict[str, object] = {}
     missing: dict[str, object] = {}
@@ -573,7 +643,7 @@ def analyze_task(root: Path, events: Path | None = None) -> AnalysisResult:
     }
 
     if events is not None:
-        event_path = resolve_within(resolved_root, events)
+        event_path = resolve_event_path(resolved_root, events)
         normalized_events = load_events(event_path)
         measured = {
             "event_count": len(normalized_events),
@@ -669,35 +739,95 @@ def build_evidence_section(result: AnalysisResult) -> str:
     return format_bullets(lines)
 
 
+def read_contract_text(root: Path, inventory: EvidenceInventory) -> str:
+    fragments: list[str] = []
+    for item in inventory.files:
+        path = root / item.relative_path
+        if path.suffix.lower() not in CONTRACT_TEXT_SUFFIXES:
+            continue
+        fragments.append(redact_text(path.read_text(encoding="utf-8", errors="replace")).lower())
+    return "\n".join(fragments)
+
+
+def contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def build_acceptance_row(
+    area: str,
+    required: dict[str, bool],
+    supporting: list[str],
+    empty_message: str,
+) -> tuple[str, str, str, str]:
+    observed = [label for label, ok in required.items() if ok]
+    missing = [label for label, ok in required.items() if not ok]
+    if not observed and not supporting:
+        return (area, "not observed", "low", empty_message)
+    if not missing:
+        return (area, "pass", "high", f"Observed {format_inline_list(observed + supporting)}.")
+    evidence_parts = []
+    if observed or supporting:
+        evidence_parts.append(f"Observed {format_inline_list(observed + supporting)}.")
+    if missing:
+        evidence_parts.append(f"Missing {format_inline_list(missing)}.")
+    confidence = "medium" if len(observed) + len(supporting) >= max(2, len(required) - 1) else "low"
+    return (area, "applicable", confidence, " ".join(evidence_parts))
+
+
 def build_acceptance_matrix(result: AnalysisResult) -> str:
     measured_clients = {str(client) for client in result.measured.get("clients", [])}
-    inventory_paths = [item.relative_path.lower() for item in result.inventory.files]
-    has_yaml = any(path.endswith((".yaml", ".yml")) for path in inventory_paths)
+    signals = result.derived.get("acceptance_signals", {})
+    if not isinstance(signals, dict):
+        signals = {}
     security_observed = result.evidence.get("secret_scrubbing") == "derived"
+    codex_row = build_acceptance_row(
+        "Codex",
+        {
+            "skill discovery guidance": bool(signals.get("codex_skill_guidance")),
+            "bounded context guidance": bool(signals.get("codex_bounded_context_guidance")),
+            "worktree or SDD boundary": bool(signals.get("codex_worktree_or_sdd_boundary")),
+            "concise verification guidance": bool(signals.get("codex_concise_verification_guidance")),
+            "telemetry-boundary guidance": bool(signals.get("codex_telemetry_boundary_guidance")),
+        },
+        ["measured Codex client telemetry"] if "codex" in measured_clients else [],
+        "No Codex-specific guidance or telemetry was observed.",
+    )
+    claude_row = build_acceptance_row(
+        "Claude",
+        {
+            "adapter discovery": bool(signals.get("claude_adapter_present")),
+            "shared skill paths": bool(signals.get("claude_shared_skill_paths")),
+            "metadata-only adapter guidance": bool(signals.get("claude_metadata_only_adapter_guidance")),
+            "equivalent offline workflow": bool(signals.get("claude_offline_workflow_guidance")),
+        },
+        ["measured Claude client telemetry"] if "claude" in measured_clients else [],
+        "No Claude adapter guidance or telemetry was observed.",
+    )
+    yaml_row = build_acceptance_row(
+        "YAML",
+        {
+            "frontmatter handling": bool(signals.get("yaml_frontmatter_handling")),
+            "scalar typing": bool(signals.get("yaml_scalar_typing")),
+            "quoted and block scalar behavior": bool(signals.get("yaml_quoted_and_block_scalar_behavior")),
+            "malformed input handling": bool(signals.get("yaml_malformed_input_handling")),
+        },
+        ["YAML artifacts in scope"] if bool(signals.get("yaml_artifacts_present")) else [],
+        "No YAML artifacts or validation guidance were observed.",
+    )
     rows = [
-        (
-            "Codex",
-            "pass" if "codex" in measured_clients else "not observed",
-            "Measured Codex usage export observed." if "codex" in measured_clients else "No Codex telemetry in scope.",
-        ),
-        (
-            "Claude",
-            "pass" if "claude" in measured_clients else "not observed",
-            "Measured Claude usage export observed." if "claude" in measured_clients else "No Claude telemetry in scope.",
-        ),
+        codex_row,
+        claude_row,
         (
             "MCP",
             "not observed",
+            "low",
             "Use only tool counts and durations; automatic LLM token counts are not available from MCP alone.",
         ),
-        (
-            "YAML",
-            "pass" if has_yaml else "not observed",
-            "YAML evidence is present in scope." if has_yaml else "No YAML artifacts were selected for analysis.",
-        ),
+        yaml_row,
         (
             "Security",
             "pass" if security_observed else "not observed",
+            "high" if security_observed else "low",
             (
                 "Observed redacted secret-like values in local evidence while outputs stayed aggregate-only and excluded raw prompts or transcripts."
                 if security_observed
@@ -705,7 +835,7 @@ def build_acceptance_matrix(result: AnalysisResult) -> str:
             ),
         ),
     ]
-    return format_table(("Area", "Status", "Evidence"), rows)
+    return format_table(("Area", "Status", "Confidence", "Evidence"), rows)
 
 
 def build_cost_breakdown(result: AnalysisResult) -> str:

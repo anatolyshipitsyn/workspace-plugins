@@ -212,11 +212,13 @@ class AnalyzerCoreTests(unittest.TestCase):
         )
         self.assertTrue(all(not Path(item.relative_path).is_absolute() for item in inventory.files))
 
-    def test_rejects_event_paths_outside_root(self) -> None:
+    def test_allows_explicit_absolute_event_paths_outside_root(self) -> None:
         analyzer = load_analyzer(self)
 
-        with self.assertRaisesRegex(ValueError, "outside"):
-            analyzer.analyze_task(MINIMAL_TASK_ROOT, EVENTS / "codex-usage.json")
+        result = analyzer.analyze_task(MINIMAL_TASK_ROOT, EVENTS / "codex-usage.json")
+
+        self.assertEqual(result.measured["total_tokens"], 3000)
+        self.assertEqual(result.evidence["token_counts"], "measured")
 
     def test_cli_resolves_root_relative_events_path(self) -> None:
         self.assertTrue(SCRIPT_PATH.is_file(), f"missing analyzer script: {SCRIPT_PATH}")
@@ -245,6 +247,34 @@ class AnalyzerCoreTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["measured"]["total_tokens"], 140)
         self.assertEqual(payload["evidence"]["token_counts"], "measured")
+
+    def test_cli_rejects_root_relative_event_paths_that_escape_root(self) -> None:
+        self.assertTrue(SCRIPT_PATH.is_file(), f"missing analyzer script: {SCRIPT_PATH}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            root = workspace / "task-root"
+            root.mkdir()
+            (root / "plan.md").write_text("# Plan\n", encoding="utf-8")
+            events_path = write_jsonl(
+                workspace / "events.jsonl",
+                [
+                    {
+                        "exported_from": "codex",
+                        "event_type": "stop",
+                        "session_id": "codex-export-session-002",
+                        "created_at": "2026-08-27T09:05:00Z",
+                        "model_slug": "gpt-5-codex",
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140},
+                        "duration_ms": 120,
+                    }
+                ],
+            )
+
+            completed = run_cli(root, "--events", "../events.jsonl")
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("outside the requested root", completed.stderr)
 
     def test_rejects_malformed_and_negative_event_data_without_echoing_payload(self) -> None:
         self.assertTrue(SCRIPT_PATH.is_file(), f"missing analyzer script: {SCRIPT_PATH}")
@@ -355,6 +385,64 @@ class AnalyzerCoreTests(unittest.TestCase):
         self.assertEqual(result.derived["review_file_count"], 2)
         self.assertEqual(result.derived["verbose_log_files"], 1)
         self.assertEqual(result.evidence["secret_scrubbing"], "missing")
+
+    def test_acceptance_matrix_marks_partial_client_telemetry_as_applicable(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "task-report.md").write_text("Aggregate report only.\n", encoding="utf-8")
+            events_path = write_json(
+                root / "events.json",
+                [
+                    {
+                        "client": "codex",
+                        "session_id_hash": "codex-session-1",
+                        "event": "stop",
+                        "timestamp": "2026-08-27T11:00:00Z",
+                        "model": "gpt-5-codex",
+                        "input_tokens": 80,
+                        "output_tokens": 20,
+                        "total_tokens": 100,
+                        "duration_ms": 50,
+                    },
+                    {
+                        "client": "claude",
+                        "session_id_hash": "claude-session-1",
+                        "event": "api_response",
+                        "timestamp": "2026-08-27T11:01:00Z",
+                        "model": "claude-sonnet-4",
+                        "input_tokens": 60,
+                        "output_tokens": 15,
+                        "total_tokens": 75,
+                        "duration_ms": 35,
+                    },
+                ],
+            )
+
+            result = analyzer.analyze_task(root, events_path)
+
+        matrix = analyzer.build_acceptance_matrix(result)
+
+        self.assertIn("| Area | Status | Confidence | Evidence |", matrix)
+        self.assertIn("| Codex | applicable |", matrix)
+        self.assertIn("| Claude | applicable |", matrix)
+        self.assertNotIn("| Codex | pass |", matrix)
+        self.assertNotIn("| Claude | pass |", matrix)
+
+    def test_acceptance_matrix_marks_yaml_without_validation_as_applicable(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "settings.yaml").write_text("mode: offline\n", encoding="utf-8")
+
+            result = analyzer.analyze_task(root)
+
+        matrix = analyzer.build_acceptance_matrix(result)
+
+        self.assertIn("| YAML | applicable |", matrix)
+        self.assertNotIn("| YAML | pass |", matrix)
 
 
 if __name__ == "__main__":

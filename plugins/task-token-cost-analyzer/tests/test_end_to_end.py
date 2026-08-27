@@ -17,6 +17,9 @@ REPORT_TEMPLATE = PLUGIN_ROOT / "templates" / "cost-report.md"
 PROMPT_TEMPLATE = PLUGIN_ROOT / "templates" / "plugin-update-prompt.md"
 README_PATH = PLUGIN_ROOT / "README.md"
 CHANGELOG_PATH = PLUGIN_ROOT / "CHANGELOG.md"
+CLIENT_GUIDANCE_PATH = (
+    PLUGIN_ROOT / "skills" / "analyze-task-token-cost" / "references" / "client-guidance.md"
+)
 FIXTURES = PLUGIN_ROOT / "tests" / "fixtures"
 EVENTS = FIXTURES / "events"
 
@@ -217,12 +220,13 @@ class EndToEndContractTests(unittest.TestCase):
         self.assertNotIn("../outside", first_prompt)
 
     def test_skill_routes_to_cli_and_documents_pressure_guardrails(self) -> None:
-        for path in (SKILL_PATH, README_PATH, CHANGELOG_PATH):
+        for path in (SKILL_PATH, README_PATH, CHANGELOG_PATH, CLIENT_GUIDANCE_PATH):
             self.assertTrue(path.is_file(), f"missing Task 3 artifact: {path.relative_to(PLUGIN_ROOT)}")
 
         skill = SKILL_PATH.read_text(encoding="utf-8")
         readme = README_PATH.read_text(encoding="utf-8")
         changelog = CHANGELOG_PATH.read_text(encoding="utf-8")
+        client_guidance = CLIENT_GUIDANCE_PATH.read_text(encoding="utf-8")
 
         self.assertIn("analyze_task_cost.py", skill)
         self.assertIn("current task brief", skill.lower())
@@ -240,6 +244,8 @@ class EndToEndContractTests(unittest.TestCase):
         self.assertIn("MCP", skill)
         self.assertIn("YAML", skill)
         self.assertIn("security", skill.lower())
+        self.assertIn("absolute path", skill.lower())
+        self.assertIn("root-relative", skill.lower())
 
         for hook_event in ("SessionStart", "UserPromptSubmit", "PostToolUse", "SubagentStop", "Stop"):
             self.assertIn(hook_event, readme)
@@ -250,9 +256,14 @@ class EndToEndContractTests(unittest.TestCase):
         self.assertIn("durations", readme.lower())
         self.assertIn("not automatic llm token counts", readme.lower())
         self.assertIn("do not install hooks", readme.lower())
+        self.assertIn("absolute path", readme.lower())
+        self.assertIn("root-relative", readme.lower())
 
         self.assertIn("0.1.0", changelog)
         self.assertIn("update prompt", changelog.lower())
+
+        self.assertIn("absolute path", client_guidance.lower())
+        self.assertIn("root-relative", client_guidance.lower())
 
 
 if __name__ == "__main__":

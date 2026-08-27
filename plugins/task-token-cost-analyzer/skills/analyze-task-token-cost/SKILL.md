@@ -9,7 +9,7 @@ Run `python3 plugins/task-token-cost-analyzer/scripts/analyze_task_cost.py --roo
 
 ## Workflow
 
-1. Confirm the selected task root and any optional event file stay local, scoped, and relevant to the current task only.
+1. Confirm the selected task root and any optional event file stay local, scoped, and relevant to the current task only. Use a root-relative `--events` path only for files inside the selected root; use an absolute path for a separate local export outside the root.
 2. Run the focused tests in normal and `-S` modes without `-v`; if one fails, save the verbose rerun to a temporary log for diagnosis.
 3. Generate the report and update prompt, then perform a local adversarial audit before the first independent review or recommendation.
 4. If multiple findings share the same validator, schema, MCP, YAML, or security surface, use one batched validator-fix round.

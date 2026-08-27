@@ -11,7 +11,7 @@ python3 plugins/task-token-cost-analyzer/scripts/analyze_task_cost.py \
   --prompt-out /tmp/task-token-cost-update-prompt.md
 ```
 
-Add `--events PATH` only when you have a local normalized aggregate export to measure real token totals.
+Add `--events PATH` only when you have a local normalized aggregate export to measure real token totals. Use a root-relative path when the export is stored inside the selected task root, or an absolute path when the normalized export lives elsewhere on disk; relative escapes outside the root are rejected.
 
 ## Outputs
 

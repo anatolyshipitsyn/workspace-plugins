@@ -25,6 +25,17 @@
         "installation": "AVAILABLE"
       },
       "category": "Productivity"
+    },
+    {
+      "name": "task-token-cost-analyzer",
+      "source": {
+        "source": "local",
+        "path": "./plugins/task-token-cost-analyzer"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Productivity"
     }
   ]
 }

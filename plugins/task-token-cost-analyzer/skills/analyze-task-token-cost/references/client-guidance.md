@@ -6,6 +6,7 @@ This plugin is optional and offline-safe.
 
 - Run the analyzer only on an explicitly selected completed task path.
 - Import usage or event exports only after mapping them to the normalized aggregate event shape.
+- Use a root-relative `--events` path only for telemetry stored inside the selected task root; use an absolute path for a separate local export outside the root.
 - Keep generated reports separate from source evidence and review them before acting on any update prompt.
 
 ## Claude Code
