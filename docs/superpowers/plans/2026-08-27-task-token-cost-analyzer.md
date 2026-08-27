@@ -120,7 +120,7 @@ git commit -m "feat: define task token analyzer package contract"
 **Files:**
 
 - Create: `plugins/task-token-cost-analyzer/scripts/analyze_task_cost.py`
-- Modify: `plugins/task-token-cost-analyzer/tests/test_analyze_task_cost.py`
+- Create: `plugins/task-token-cost-analyzer/tests/test_analyze_task_cost.py`
 - Modify: `plugins/task-token-cost-analyzer/tests/fixtures/events/claude-response.json`
 - Modify: `plugins/task-token-cost-analyzer/tests/fixtures/events/codex-usage.json`
 
@@ -351,7 +351,10 @@ git commit -m "test: verify task token analyzer integration"
 ## Review and completion gates
 
 After each task, dispatch one fresh implementer/reviewer pair as required by
-`AGENTS.md`. Before the first independent review, run the adversarial audit.
+`AGENTS.md`. The task-1 package review is limited to manifests and fixtures.
+Run the adversarial audit after the analyzer first exists (Task 2) and before
+its first independent behavioral review; repeat and expand it in Task 4 before
+the whole-package review.
 When several findings affect the same validator surface, send one combined
 fix brief and perform one scoped re-review. After all tasks and fix rounds,
 run exactly one final whole-branch review on the complete branch, then run the
