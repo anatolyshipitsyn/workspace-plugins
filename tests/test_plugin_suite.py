@@ -30,9 +30,7 @@ def discover_plugin_tests() -> list[tuple[str, Path]]:
 
 
 def _load_module(module_name: str, path: Path) -> types.ModuleType:
-    existing_module = sys.modules.get(module_name)
-    if existing_module is not None:
-        return existing_module
+    sys.modules.pop(module_name, None)
 
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
@@ -62,6 +60,26 @@ def _rewrite_isolated_value(value: object, isolated_root: Path) -> object:
             key: _rewrite_isolated_value(item, isolated_root) for key, item in value.items()
         }
     return value
+
+
+class PluginDiscoveryBridgeTests(unittest.TestCase):
+    def test_repeated_load_tests_uses_fresh_modules_for_the_second_workspace(self) -> None:
+        loader = unittest.TestLoader()
+
+        first_suite = load_tests(loader, unittest.TestSuite(), None)
+        first_module = sys.modules["task_token_cost_analyzer_tests.test_package"]
+        first_plugin_root = first_module.PLUGIN_ROOT
+
+        second_suite = load_tests(loader, unittest.TestSuite(), None)
+        second_module = sys.modules["task_token_cost_analyzer_tests.test_package"]
+        second_plugin_root = second_module.PLUGIN_ROOT
+
+        self.assertGreater(first_suite.countTestCases(), 0)
+        self.assertGreater(second_suite.countTestCases(), 0)
+        self.assertIsNot(first_module, second_module)
+        self.assertNotEqual(first_plugin_root, second_plugin_root)
+        self.assertTrue(second_plugin_root.is_dir())
+        self.assertNotEqual(second_plugin_root.parents[1], ROOT)
 
 
 def _load_isolated_plugin_tests() -> list[types.ModuleType]:

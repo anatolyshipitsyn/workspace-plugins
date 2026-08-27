@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 from pathlib import Path
@@ -49,6 +50,30 @@ NORMALIZED_EVENT_FIELDS = {
     "duration_ms",
 }
 FORBIDDEN_RAW_FIELDS = {"prompt", "transcript", "raw_body"}
+NETWORK_IMPORT_ROOTS = {
+    "aiohttp",
+    "ftplib",
+    "http",
+    "httpx",
+    "paramiko",
+    "requests",
+    "socket",
+    "telnetlib",
+    "urllib",
+    "websocket",
+}
+EDIT_COMMANDS = {
+    ("git", "apply"),
+    ("patch",),
+    ("sed", "-i"),
+    ("perl", "-i"),
+    ("rm",),
+    ("mv",),
+    ("cp",),
+    ("tee",),
+    ("dd",),
+    ("truncate",),
+}
 
 
 def load_validator_module() -> types.ModuleType:
@@ -119,6 +144,26 @@ def run_validate(path: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def dotted_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = dotted_name(node.value)
+        return f"{parent}.{node.attr}" if parent else None
+    return None
+
+
+def literal_command(node: ast.AST) -> tuple[str, ...] | None:
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    values: list[str] = []
+    for element in node.elts:
+        if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            return None
+        values.append(element.value)
+    return tuple(values)
+
+
 class PackageContractTest(unittest.TestCase):
     maxDiff = None
 
@@ -171,6 +216,42 @@ class PackageContractTest(unittest.TestCase):
         self.assertNotIn("os.system", script_text)
         self.assertFalse(any(path.is_symlink() for path in PLUGIN_ROOT.rglob("*")))
         self.assertFalse(any(path.name == ".env" for path in PLUGIN_ROOT.rglob("*")))
+
+    def test_package_python_has_no_network_imports_or_automatic_edit_invocations(self) -> None:
+        network_imports: list[str] = []
+        automatic_edits: list[str] = []
+
+        for path in PLUGIN_ROOT.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            relative_path = path.relative_to(PLUGIN_ROOT).as_posix()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".", maxsplit=1)[0] in NETWORK_IMPORT_ROOTS:
+                            network_imports.append(f"{relative_path}: import {alias.name}")
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    if node.module.split(".", maxsplit=1)[0] in NETWORK_IMPORT_ROOTS:
+                        network_imports.append(f"{relative_path}: from {node.module}")
+                if not isinstance(node, ast.Call):
+                    continue
+                call_name = dotted_name(node.func)
+                if call_name in {"os.system", "os.popen"}:
+                    automatic_edits.append(f"{relative_path}: {call_name}")
+                    continue
+                if call_name not in {
+                    "subprocess.run",
+                    "subprocess.call",
+                    "subprocess.check_call",
+                    "subprocess.check_output",
+                    "subprocess.Popen",
+                } or not node.args:
+                    continue
+                command = literal_command(node.args[0])
+                if command and any(command[: len(prefix)] == prefix for prefix in EDIT_COMMANDS):
+                    automatic_edits.append(f"{relative_path}: {' '.join(command)}")
+
+        self.assertEqual(network_imports, [])
+        self.assertEqual(automatic_edits, [])
 
     def assert_normalized_aggregate_event(self, event_path: Path) -> None:
         self.assertTrue(event_path.is_file(), "expected normalized event fixture")
