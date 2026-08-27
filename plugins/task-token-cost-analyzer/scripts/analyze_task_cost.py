@@ -663,6 +663,7 @@ def build_acceptance_matrix(result: AnalysisResult) -> str:
     measured_clients = {str(client) for client in result.measured.get("clients", [])}
     inventory_paths = [item.relative_path.lower() for item in result.inventory.files]
     has_yaml = any(path.endswith((".yaml", ".yml")) for path in inventory_paths)
+    security_observed = result.evidence.get("secret_scrubbing") == "derived"
     rows = [
         (
             "Codex",
@@ -686,8 +687,12 @@ def build_acceptance_matrix(result: AnalysisResult) -> str:
         ),
         (
             "Security",
-            "pass",
-            "Outputs keep aggregate-only measurements, redact secret-like values, and exclude raw prompts or transcripts.",
+            "pass" if security_observed else "not observed",
+            (
+                "Observed redacted secret-like values in local evidence while outputs stayed aggregate-only and excluded raw prompts or transcripts."
+                if security_observed
+                else "Outputs stay aggregate-only and exclude raw prompts or transcripts, but no secret scrubbing evidence was observed in the selected scope."
+            ),
         ),
     ]
     return format_table(("Area", "Status", "Evidence"), rows)
@@ -739,6 +744,8 @@ def build_limitations(result: AnalysisResult) -> str:
         "MCP measurements are limited to tool counts and durations unless separate normalized telemetry is supplied.",
         "Codex and Claude imports remain optional local inputs, and missing telemetry stays marked as estimated or missing.",
     ]
+    if result.evidence.get("secret_scrubbing") != "derived":
+        items.append("Security redaction behavior was not exercised by the selected evidence.")
     if result.missing:
         items.append(f"Missing evidence: {format_inline_list(sorted(result.missing))}")
     return format_bullets(items)

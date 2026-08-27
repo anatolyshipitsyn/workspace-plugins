@@ -105,6 +105,9 @@ class EndToEndContractTests(unittest.TestCase):
             self.assertIn(section, prompt)
         self.assertIn("do not apply automatically", prompt.lower())
         self.assertIn("task-only context", prompt.lower())
+        self.assertIn("| Security | not observed |", report)
+        self.assertIn("no secret scrubbing evidence was observed", report.lower())
+        self.assertNotIn("| Security | pass |", report)
 
     def test_render_helpers_return_markdown_without_writing_files(self) -> None:
         analyzer = load_analyzer(self)
@@ -122,6 +125,26 @@ class EndToEndContractTests(unittest.TestCase):
         self.assertIn("Avoidable Costs", report)
         self.assertIn("Target Files", prompt)
         self.assertIn("Safety Constraints", prompt)
+
+    def test_report_marks_security_pass_only_when_secret_scrubbing_evidence_exists(self) -> None:
+        analyzer = load_analyzer(self)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "plan.md").write_text("Plan keeps scope bounded.\n", encoding="utf-8")
+            (root / "task-report.md").write_text(
+                "Authorization: Bearer secret-value\napi_key=secret-value\n",
+                encoding="utf-8",
+            )
+
+            result = analyzer.analyze_task(root)
+
+        report = analyzer.render_report(result, REPORT_TEMPLATE)
+
+        self.assertEqual(result.evidence["secret_scrubbing"], "derived")
+        self.assertIn("| Security | pass |", report)
+        self.assertIn("redacted secret-like values", report)
+        self.assertNotIn("| Security | not observed |", report)
 
     def test_skill_routes_to_cli_and_documents_pressure_guardrails(self) -> None:
         for path in (SKILL_PATH, README_PATH, CHANGELOG_PATH):
