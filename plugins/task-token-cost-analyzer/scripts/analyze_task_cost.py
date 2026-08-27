@@ -52,6 +52,10 @@ SECRET_PATTERNS = (
     re.compile(r"\b(sk|ghp|gho|ghu|xoxb|xoxp)-[A-Za-z0-9._-]+\b"),
 )
 SECRET_KEY_PATTERN = re.compile(r"(?i)(^token$|access[_-]?token|auth[_-]?token|api[_-]?key|secret|password|passwd|authorization)")
+SCRIPT_PATH = Path(__file__).resolve()
+PLUGIN_ROOT = SCRIPT_PATH.parents[1]
+REPORT_TEMPLATE_PATH = PLUGIN_ROOT / "templates" / "cost-report.md"
+PROMPT_TEMPLATE_PATH = PLUGIN_ROOT / "templates" / "plugin-update-prompt.md"
 
 
 @dataclass(frozen=True)
@@ -603,10 +607,254 @@ def analyze_task(root: Path, events: Path | None = None) -> AnalysisResult:
     )
 
 
+def format_inline_list(values: list[object]) -> str:
+    normalized = [str(value) for value in values if str(value).strip()]
+    return ", ".join(normalized) if normalized else "none observed"
+
+
+def format_bullets(lines: list[str]) -> str:
+    if not lines:
+        return "- none"
+    return "\n".join(f"- {line}" for line in lines)
+
+
+def format_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
+    divider = "| " + " | ".join("---" for _ in headers) + " |"
+    body = ["| " + " | ".join(row) + " |" for row in rows]
+    return "\n".join(
+        ["| " + " | ".join(headers) + " |", divider, *body]
+    )
+
+
+def build_scope_section(result: AnalysisResult) -> str:
+    return format_bullets(
+        [
+            f"Selected root: `{result.root}`",
+            f"Evidence files: {len(result.inventory.files)}",
+            f"Token evidence quality: `{result.evidence['token_counts']}`",
+            f"Duration evidence quality: `{result.evidence['durations']}`",
+        ]
+    )
+
+
+def build_evidence_section(result: AnalysisResult) -> str:
+    measured = result.measured
+    derived = result.derived
+    estimated = result.estimated
+    missing = result.missing
+    lines = [
+        f"Measured clients: {format_inline_list(measured.get('clients', []))}",
+        f"Measured models: {format_inline_list(measured.get('models', []))}",
+        f"Artifact bytes: {derived['artifact_bytes']}",
+        f"Artifact lines: {derived['artifact_lines']}",
+        f"Repeated context files: {derived['repeated_context_files']}",
+        f"Verbose log files: {derived['verbose_log_files']}",
+    ]
+    if estimated:
+        lines.append(
+            f"Estimated tokens: {estimated['approx_total_tokens']} ({estimated['confidence']} confidence; {estimated['basis']})"
+        )
+    if missing:
+        lines.append(f"Missing evidence keys: {format_inline_list(sorted(missing))}")
+    return format_bullets(lines)
+
+
+def build_acceptance_matrix(result: AnalysisResult) -> str:
+    measured_clients = {str(client) for client in result.measured.get("clients", [])}
+    inventory_paths = [item.relative_path.lower() for item in result.inventory.files]
+    has_yaml = any(path.endswith((".yaml", ".yml")) for path in inventory_paths)
+    rows = [
+        (
+            "Codex",
+            "pass" if "codex" in measured_clients else "not observed",
+            "Measured Codex usage export observed." if "codex" in measured_clients else "No Codex telemetry in scope.",
+        ),
+        (
+            "Claude",
+            "pass" if "claude" in measured_clients else "not observed",
+            "Measured Claude usage export observed." if "claude" in measured_clients else "No Claude telemetry in scope.",
+        ),
+        (
+            "MCP",
+            "not observed",
+            "Use only tool counts and durations; automatic LLM token counts are not available from MCP alone.",
+        ),
+        (
+            "YAML",
+            "pass" if has_yaml else "not observed",
+            "YAML evidence is present in scope." if has_yaml else "No YAML artifacts were selected for analysis.",
+        ),
+        (
+            "Security",
+            "pass",
+            "Outputs keep aggregate-only measurements, redact secret-like values, and exclude raw prompts or transcripts.",
+        ),
+    ]
+    return format_table(("Area", "Status", "Evidence"), rows)
+
+
+def build_cost_breakdown(result: AnalysisResult) -> str:
+    measured_total = str(result.measured.get("total_tokens", "not measured"))
+    estimated_total = str(result.estimated.get("approx_total_tokens", "n/a"))
+    derived = result.derived
+    rows = [
+        ("Measured tokens", measured_total, result.evidence["token_counts"]),
+        ("Estimated tokens", estimated_total, result.evidence["token_counts"]),
+        ("Evidence files", str(derived["evidence_file_count"]), "derived"),
+        ("Review artifacts", str(derived["review_file_count"]), "derived"),
+        ("Duration ms", str(result.measured.get("duration_ms", "not measured")), result.evidence["durations"]),
+    ]
+    return format_table(("Category", "Value", "Source"), rows)
+
+
+def build_avoidable_costs(result: AnalysisResult) -> str:
+    derived = result.derived
+    items = [
+        f"Repeated context artifacts observed: {derived['repeated_context_files']}",
+        f"Verbose log artifacts observed: {derived['verbose_log_files']}",
+        f"Secret redaction observations: {derived['secret_redaction_hits']}",
+    ]
+    if result.evidence["token_counts"] != "measured":
+        items.append("Measured token telemetry is missing, so recommendations must avoid pretending estimates are exact.")
+    return format_bullets(items)
+
+
+def build_recommendations(result: AnalysisResult) -> str:
+    items = [
+        "Run a local adversarial audit before the first independent review and before making recommendations.",
+        "Give any reviewer or subagent task-only context: the current task brief, required interfaces, and referenced artifact paths, never the complete conversation history.",
+        "Batch validator fixes when multiple findings share the same validation surface so one fix round closes the full cluster.",
+        "Generate the update prompt for user review and do not apply automatically.",
+    ]
+    if result.evidence["token_counts"] != "measured":
+        items.append("Normalize a local Claude or Codex event export if you need measured token totals.")
+    if int(result.derived.get("verbose_log_files", 0)) > 0:
+        items.append("Keep focused test commands concise and save verbose reruns to a temporary log only after a failure.")
+    return format_bullets(items)
+
+
+def build_limitations(result: AnalysisResult) -> str:
+    items = [
+        "The analyzer reports aggregate local evidence only; it does not read remote services or send events over the network.",
+        "MCP measurements are limited to tool counts and durations unless separate normalized telemetry is supplied.",
+        "Codex and Claude imports remain optional local inputs, and missing telemetry stays marked as estimated or missing.",
+    ]
+    if result.missing:
+        items.append(f"Missing evidence: {format_inline_list(sorted(result.missing))}")
+    return format_bullets(items)
+
+
+def build_target_files(result: AnalysisResult) -> str:
+    evidence_paths = [f"`{item.relative_path}`" for item in result.inventory.files[:5]]
+    items = [
+        f"Primary analysis root: `{result.root}`",
+        f"In-scope evidence paths: {', '.join(evidence_paths) if evidence_paths else 'none observed'}",
+        "Bounded plugin update files implicated by the evidence plus the matching changelog and task report entry.",
+    ]
+    return format_bullets(items)
+
+
+def build_problem_statement(result: AnalysisResult) -> str:
+    statements = [
+        f"Token evidence is `{result.evidence['token_counts']}` and duration evidence is `{result.evidence['durations']}`.",
+        "The update should reduce avoidable process cost without widening scope beyond the current task.",
+    ]
+    if result.missing:
+        statements.append(f"Missing evidence prevents stronger claims for: {format_inline_list(sorted(result.missing))}.")
+    return format_bullets(statements)
+
+
+def build_proposed_change(result: AnalysisResult) -> str:
+    statements = [
+        "Prepare a bounded plugin update that improves the highest-confidence cost issue supported by the evidence.",
+        "Include the exact changelog and task report entry needed to document the adjustment.",
+        "Keep any follow-up review request limited to task-only context and referenced artifact paths.",
+    ]
+    if int(result.derived.get("repeated_context_files", 0)) > 0:
+        statements.append("Remove repeated context handoffs before adding new process steps.")
+    return format_bullets(statements)
+
+
+def build_acceptance_tests(result: AnalysisResult) -> str:
+    del result
+    return format_bullets(
+        [
+            "`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest plugins/task-token-cost-analyzer/tests/test_package.py plugins/task-token-cost-analyzer/tests/test_end_to_end.py`",
+            "`PYTHONDONTWRITEBYTECODE=1 python3 -S -m unittest plugins/task-token-cost-analyzer/tests/test_package.py plugins/task-token-cost-analyzer/tests/test_end_to_end.py`",
+            "If a focused test fails, save the verbose rerun to a temporary log for diagnosis instead of adding `-v` to the default command.",
+        ]
+    )
+
+
+def build_safety_constraints(result: AnalysisResult) -> str:
+    del result
+    return format_bullets(
+        [
+            "Do not apply automatically; generate the update prompt only.",
+            "Do not send the complete conversation history. Use task-only context.",
+            "Run the local adversarial audit before the first independent review or recommendation.",
+            "Do not install hooks, edit AGENTS.md, read private client databases, or send events over the network.",
+        ]
+    )
+
+
+def render_template(template: Path, values: dict[str, str]) -> str:
+    template_text = template.read_text(encoding="utf-8")
+    return template_text.format(**values).rstrip() + "\n"
+
+
+def render_report(result: AnalysisResult, template: Path) -> str:
+    return render_template(
+        template,
+        {
+            "scope": build_scope_section(result),
+            "evidence": build_evidence_section(result),
+            "acceptance_matrix": build_acceptance_matrix(result),
+            "cost_breakdown": build_cost_breakdown(result),
+            "avoidable_costs": build_avoidable_costs(result),
+            "recommendations": build_recommendations(result),
+            "limitations": build_limitations(result),
+        },
+    )
+
+
+def render_update_prompt(result: AnalysisResult, template: Path) -> str:
+    return render_template(
+        template,
+        {
+            "target_files": build_target_files(result),
+            "problem": build_problem_statement(result),
+            "proposed_change": build_proposed_change(result),
+            "acceptance_tests": build_acceptance_tests(result),
+            "safety_constraints": build_safety_constraints(result),
+        },
+    )
+
+
+def resolve_output_path(path: Path) -> Path:
+    candidate = path.expanduser()
+    selected_output_dir = (candidate.parent if candidate.parent != Path("") else Path(".")).resolve()
+    if not selected_output_dir.exists():
+        raise ValueError(f"Output directory does not exist: {selected_output_dir}")
+    if not selected_output_dir.is_dir():
+        raise ValueError(f"Output directory is not a directory: {selected_output_dir}")
+
+    resolved_path = candidate.resolve()
+    if not is_relative_to(resolved_path, selected_output_dir):
+        raise ValueError(f"Output path is outside the selected output directory: {path}")
+    return resolved_path
+
+
+def write_output(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
     parser.add_argument("--events")
+    parser.add_argument("--report-out")
+    parser.add_argument("--prompt-out")
     parser.add_argument("--format", default="json", choices=("json",))
     return parser.parse_args(argv)
 
@@ -615,6 +863,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = parse_args(argv)
         result = analyze_task(Path(args.root), Path(args.events) if args.events else None)
+        if bool(args.report_out) != bool(args.prompt_out):
+            raise ValueError("Both --report-out and --prompt-out are required together")
+        if args.report_out and args.prompt_out:
+            report_out = resolve_output_path(Path(args.report_out))
+            prompt_out = resolve_output_path(Path(args.prompt_out))
+            write_output(report_out, render_report(result, REPORT_TEMPLATE_PATH))
+            write_output(prompt_out, render_update_prompt(result, PROMPT_TEMPLATE_PATH))
     except (OSError, ValueError) as exc:
         print(f"error: {redact_text(str(exc))}", file=sys.stderr)
         return 2

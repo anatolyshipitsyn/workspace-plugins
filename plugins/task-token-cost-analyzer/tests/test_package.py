@@ -20,6 +20,13 @@ REQUIRED_REFERENCE_DOCS = (
     PLUGIN_ROOT / "skills" / "analyze-task-token-cost" / "references" / "cost-model.md",
     PLUGIN_ROOT / "skills" / "analyze-task-token-cost" / "references" / "client-guidance.md",
 )
+REQUIRED_TASK3_ARTIFACTS = (
+    PLUGIN_ROOT / "skills" / "analyze-task-token-cost" / "SKILL.md",
+    PLUGIN_ROOT / "templates" / "cost-report.md",
+    PLUGIN_ROOT / "templates" / "plugin-update-prompt.md",
+    PLUGIN_ROOT / "README.md",
+    PLUGIN_ROOT / "CHANGELOG.md",
+)
 REQUIRED_MINIMAL_TASK_FIXTURES = (
     FIXTURES / "minimal-task" / "plan.md",
     FIXTURES / "minimal-task" / "progress.md",
@@ -110,8 +117,11 @@ class PackageContractTest(unittest.TestCase):
         self.assertFalse((PLUGIN_ROOT / ".claude-plugin" / "skills").exists())
         self.assertFalse((PLUGIN_ROOT / ".claude-plugin" / "scripts").exists())
         self.assertEqual(ANALYZER_SCRIPT.relative_to(PLUGIN_ROOT).as_posix(), "scripts/analyze_task_cost.py")
+        self.assertFalse((PLUGIN_ROOT / ".claude-plugin" / "hooks").exists())
         for path in (*REQUIRED_REFERENCE_DOCS, *REQUIRED_MINIMAL_TASK_FIXTURES):
-            self.assertTrue(path.is_file(), f"expected Task 1 artifact: {path.relative_to(PLUGIN_ROOT)}")
+            self.assertTrue(path.is_file(), f"expected prior-task artifact: {path.relative_to(PLUGIN_ROOT)}")
+        for path in REQUIRED_TASK3_ARTIFACTS:
+            self.assertTrue(path.is_file(), f"expected Task 3 artifact: {path.relative_to(PLUGIN_ROOT)}")
 
     def test_event_fixture_contains_only_normalized_aggregate_fields(self) -> None:
         for event_path in EVENT_FIXTURES:
