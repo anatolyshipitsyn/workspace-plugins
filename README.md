@@ -266,6 +266,21 @@ Typical flow:
 The creator package README documents the package-level details, including the
 bundled registry, offline usage, and the exact scaffold and validator commands.
 
+## Using `github-pr-agent`
+
+`plugins/github-pr-agent` provides the shared `create-pr`, `update-pr`, and
+`babysit-pr` skills plus a dependency-free watcher script. It requires the
+GitHub CLI (`gh`) with a completed `gh auth login`.
+
+```bash
+claude plugin install github-pr-agent@workspace-plugins
+codex plugin add github-pr-agent@workspace-plugins
+```
+
+The watcher emits one compact JSON line per snapshot and, in continuous mode,
+prints only when the state an agent would act on has changed. The package
+README documents the snapshot shape and the flags that restore fuller output.
+
 ## Loading checks
 
 These checks are about a single plugin package, not about connecting the

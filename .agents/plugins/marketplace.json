@@ -14,6 +14,17 @@
         "installation": "AVAILABLE"
       },
       "category": "Productivity"
+    },
+    {
+      "name": "github-pr-agent",
+      "source": {
+        "source": "local",
+        "path": "./plugins/github-pr-agent"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Productivity"
     }
   ]
 }
