@@ -69,6 +69,15 @@ class EndToEndTest(unittest.TestCase):
                 },
             )
 
+            skill_path = plugin_root / "skills" / "review-skill" / "SKILL.md"
+            skill_path.write_text(
+                skill_path.read_text(encoding="utf-8").replace(
+                    "Replace this placeholder with real instructions for `review-skill`.",
+                    "Offline integration instructions.",
+                ),
+                encoding="utf-8",
+            )
+
             validate_result = run_command("python3", str(VALIDATE_SCRIPT), str(plugin_root))
             isolated_validate_result = run_command(
                 "python3",

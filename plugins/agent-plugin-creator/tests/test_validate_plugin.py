@@ -113,7 +113,17 @@ class ValidatePluginTest(unittest.TestCase):
             mcp_servers=mcp_servers,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        return destination / "demo-plugin"
+        plugin_root = destination / "demo-plugin"
+        for skill_name in skills or ["review-skill"]:
+            skill_md = plugin_root / "skills" / skill_name / "SKILL.md"
+            skill_md.write_text(
+                skill_md.read_text(encoding="utf-8").replace(
+                    f"Replace this placeholder with real instructions for `{skill_name}`.",
+                    "Instructions.",
+                ),
+                encoding="utf-8",
+            )
+        return plugin_root
 
     def test_accepts_generated_portable_plugin(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -175,6 +185,30 @@ class ValidatePluginTest(unittest.TestCase):
             result = run_validate(plugin_root)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_accepts_generated_claude_stdio_adapter_with_placeholders(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(
+                temp_dir,
+                clients=["codex", "claude"],
+                mcp_servers=[
+                    {
+                        "name": "demo",
+                        "config": {
+                            "type": "stdio",
+                            "command": "python3",
+                            "args": ["server.py"],
+                            "cwd": "${PLUGIN_ROOT}",
+                            "env": {"PLUGIN_HOME": "${PLUGIN_DATA}"},
+                        },
+                    }
+                ],
+            )
+
+            for isolated in (False, True):
+                with self.subTest(isolated=isolated):
+                    result = run_validate(plugin_root, isolated=isolated)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_rejects_invalid_claude_http_urls(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -510,6 +544,45 @@ class ValidatePluginTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_rejects_shell_and_javascript_secret_declarations_without_echoing_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            shell_value = "shell" + "-secret-value"
+            javascript_value = "javascript" + "-secret-value"
+            (plugin_root / "settings.sh").write_text(
+                f'export API_KEY="{shell_value}"\n',
+                encoding="utf-8",
+            )
+            (plugin_root / "settings.js").write_text(
+                f'const API_KEY = "{javascript_value}";\n',
+                encoding="utf-8",
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("settings.sh", result.stdout)
+            self.assertIn("settings.js", result.stdout)
+            self.assertIn("secret", result.stdout.lower())
+            self.assertNotIn(shell_value, result.stdout)
+            self.assertNotIn(javascript_value, result.stdout)
+
+    def test_accepts_benign_shell_and_javascript_names_that_contain_secret_substrings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            (plugin_root / "settings.sh").write_text(
+                'export secretary="ordinary-setting-value"\n',
+                encoding="utf-8",
+            )
+            (plugin_root / "settings.js").write_text(
+                'const tokenizer = "ordinary-setting-value";\n',
+                encoding="utf-8",
+            )
+
+            result = run_validate(plugin_root)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rejects_invalid_remote_headers_and_case_insensitive_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_root = self.scaffold_plugin(
@@ -701,6 +774,24 @@ class ValidatePluginTest(unittest.TestCase):
             result = run_validate(plugin_root, isolated=True)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_unfinished_skill_placeholder_but_accepts_placeholder_discussion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir)
+            skill_md = plugin_root / "skills" / "review-skill" / "SKILL.md"
+            frontmatter = "---\nname: review-skill\ndescription: Review files\n---\n\n"
+
+            cases = [
+                ("unfinished", "Replace this placeholder with real instructions for `review-skill`.\n", 1),
+                ("discussion", "This skill explains how to replace placeholders in templates.\n", 0),
+            ]
+            for label, body, expected_code in cases:
+                with self.subTest(label=label):
+                    skill_md.write_text(frontmatter + body, encoding="utf-8")
+                    result = run_validate(plugin_root)
+                    self.assertEqual(result.returncode, expected_code, result.stdout + result.stderr)
+                    if expected_code:
+                        self.assertIn("placeholder", result.stdout.lower())
 
     def test_matches_yaml_scalar_typing_for_required_frontmatter_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1036,6 +1127,31 @@ class ValidatePluginTest(unittest.TestCase):
             result = run_validate(plugin_root)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_unsupported_or_wrongly_typed_claude_manifest_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = self.scaffold_plugin(temp_dir, clients=["codex", "claude"])
+            adapter_path = plugin_root / ".claude-plugin" / "plugin.json"
+            original = adapter_path.read_text(encoding="utf-8")
+            cases = [
+                ("name-type", {"name": 1}, "name"),
+                ("version-type", {"version": 1}, "version"),
+                ("description-type", {"description": []}, "description"),
+                ("unsupported-field", {"keywords": ["agent-plugin"]}, "unsupported"),
+            ]
+
+            try:
+                for label, changes, needle in cases:
+                    with self.subTest(label=label):
+                        adapter = read_json(adapter_path)
+                        adapter.update(changes)
+                        write_json(adapter_path, adapter)
+                        result = run_validate(plugin_root)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(".claude-plugin/plugin.json", result.stdout)
+                        self.assertIn(needle, result.stdout.lower())
+            finally:
+                adapter_path.write_text(original, encoding="utf-8")
 
 
 if __name__ == "__main__":

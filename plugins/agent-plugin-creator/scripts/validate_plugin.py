@@ -25,6 +25,11 @@ CLAUDE_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}"
 CLAUDE_PLUGIN_DATA = "${CLAUDE_PLUGIN_DATA}"
 PORTABLE_PLUGIN_ROOT = "${PLUGIN_ROOT}"
 PORTABLE_PLUGIN_DATA = "${PLUGIN_DATA}"
+CLAUDE_MANIFEST_FIELD_TYPES = {
+    "name": str,
+    "version": str,
+    "description": str,
+}
 SKILL_FRONTMATTER_KEYS = {
     "name",
     "description",
@@ -50,6 +55,14 @@ YAML_TIMESTAMP_PATTERN = re.compile(
     r"(?:\.\d*)?(?:[ \t]*(?:Z|[-+]\d{1,2}(?::?\d{2})?))?$"
 )
 YAML_SEXAGESIMAL_PATTERN = re.compile(r"^[-+]?[0-9][0-9_]*(?::[0-9][0-9_]*)+$")
+UNFINISHED_SKILL_PLACEHOLDER_PATTERN = re.compile(
+    r"(?im)^\s*Replace this placeholder with real instructions for `[^`\r\n]+`\.\s*$"
+)
+NON_PYTHON_SECRET_DECLARATION_PATTERN = re.compile(
+    r"(?im)^[ \t]*(?:export[ \t]+)?(?:(?:const|let|var)[ \t]+)?"
+    r"([a-z_][a-z0-9_]*)[ \t]*=[ \t]*"
+    r"(?:\"([^\"\n]*)\"|'([^'\n]*)'|([^\s;#]+))"
+)
 
 
 class ValidationFailure(Exception):
@@ -548,7 +561,15 @@ def validate_skill_frontmatter(
         )
         return
 
-    frontmatter, _body = document
+    frontmatter, body = document
+    if UNFINISHED_SKILL_PLACEHOLDER_PATTERN.search(body):
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            skill_md,
+            "Skill body still contains unfinished scaffolder placeholder text.",
+            "Replace the scaffold placeholder with the skill's real instructions.",
+        )
     unexpected_keys = sorted(set(frontmatter) - SKILL_FRONTMATTER_KEYS)
     if unexpected_keys:
         add_diagnostic(
@@ -1178,8 +1199,8 @@ def validate_mcp_file(
                 target_path,
                 server_name,
                 server_config,
-                placeholder_root=placeholder_root,
-                placeholder_data=placeholder_data,
+                placeholder_root=PORTABLE_PLUGIN_ROOT,
+                placeholder_data=PORTABLE_PLUGIN_DATA,
             )
         elif transport in {"streamable-http", "sse"}:
             validate_remote_server(diagnostics, package_root, target_path, server_name, server_config)
@@ -1220,6 +1241,26 @@ def validate_claude_manifest(diagnostics: list[Diagnostic], package_root: Path, 
         )
         return
 
+    unsupported_fields = sorted(set(adapter_manifest) - set(CLAUDE_MANIFEST_FIELD_TYPES))
+    if unsupported_fields:
+        add_diagnostic(
+            diagnostics,
+            package_root,
+            adapter_path,
+            f"Claude adapter field(s) are unsupported: {', '.join(unsupported_fields)}.",
+            "Keep the Claude adapter manifest limited to name, version, and description.",
+        )
+
+    for field, expected_type in CLAUDE_MANIFEST_FIELD_TYPES.items():
+        if field in adapter_manifest and not isinstance(adapter_manifest[field], expected_type):
+            add_diagnostic(
+                diagnostics,
+                package_root,
+                adapter_path,
+                f"Claude adapter field {field!r} must be a string when present.",
+                f"Set {field} to a string value or remove it from the Claude adapter manifest.",
+            )
+
     adapter_name = adapter_manifest.get("name")
     if not isinstance(adapter_name, str) or adapter_name != portable_manifest.get("name"):
         add_diagnostic(
@@ -1229,17 +1270,6 @@ def validate_claude_manifest(diagnostics: list[Diagnostic], package_root: Path, 
             "Claude adapter name must match the portable plugin manifest name.",
             "Set .claude-plugin/plugin.json name to the same plugin name as plugin.json.",
         )
-
-    for field in ("version", "description"):
-        if field in adapter_manifest and not isinstance(adapter_manifest[field], str):
-            add_diagnostic(
-                diagnostics,
-                package_root,
-                adapter_path,
-                f"Claude adapter field {field!r} must be a string when present.",
-                f"Set {field} to a string value or remove it from the Claude adapter manifest.",
-            )
-
 
 def iter_text_files(package_root: Path) -> Iterable[Path]:
     for current_root, dir_names, file_names in os.walk(package_root, topdown=True, followlinks=False):
@@ -1295,6 +1325,16 @@ def contains_python_text_secret_material(content: str) -> bool:
     return False
 
 
+def contains_non_python_secret_material(content: str) -> bool:
+    for match in NON_PYTHON_SECRET_DECLARATION_PATTERN.finditer(content):
+        if not looks_like_secret_name(match.group(1)):
+            continue
+        value = next(group for group in match.groups()[1:] if group is not None)
+        if is_obvious_secret_value(value):
+            return True
+    return False
+
+
 def contains_python_secret_dict_literal(node: ast.AST) -> bool:
     for child in ast.walk(node):
         if not isinstance(child, ast.Dict):
@@ -1342,7 +1382,9 @@ def validate_secret_material(diagnostics: list[Diagnostic], package_root: Path) 
         if file_path.suffix.lower() == ".py":
             has_secret = contains_python_secret_material(content)
         else:
-            has_secret = any(pattern.search(content) for pattern in SECRET_PATTERNS)
+            has_secret = contains_non_python_secret_material(content) or any(
+                pattern.search(content) for pattern in SECRET_PATTERNS
+            )
         if file_path.suffix.lower() == ".json":
             try:
                 has_secret = has_secret or contains_structured_secret(json.loads(content))
