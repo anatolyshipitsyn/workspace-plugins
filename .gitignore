@@ -1,2 +1,4 @@
 .worktrees/
 .superpowers/
+.DS_Store
+__pycache__/

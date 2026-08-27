@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "github-pr-agent",
+  "version": "0.1.0",
+  "description": "Create, update, and safely babysit GitHub pull requests with a token-frugal CI and review watcher.",
+  "keywords": [
+    "agent-plugin"
+  ],
+  "license": "Apache-2.0"
+}

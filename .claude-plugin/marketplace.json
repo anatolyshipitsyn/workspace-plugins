@@ -12,6 +12,11 @@
       "name": "agent-plugin-creator",
       "source": "./plugins/agent-plugin-creator",
       "description": "Create or update a portable Agent Plugin package for Codex and Claude Code using bundled release metadata and local validation scripts."
+    },
+    {
+      "name": "github-pr-agent",
+      "source": "./plugins/github-pr-agent",
+      "description": "Create, update, and safely babysit GitHub pull requests with a token-frugal CI and review watcher."
     }
   ]
 }
