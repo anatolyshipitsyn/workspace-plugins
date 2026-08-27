@@ -1,0 +1,19 @@
+{
+  "name": "workspace-plugins",
+  "interface": {
+    "displayName": "Workspace Plugins"
+  },
+  "plugins": [
+    {
+      "name": "agent-plugin-creator",
+      "source": {
+        "source": "local",
+        "path": "./plugins/agent-plugin-creator"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
